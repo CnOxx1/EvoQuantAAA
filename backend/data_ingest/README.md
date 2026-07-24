@@ -99,6 +99,18 @@
 阶段 E（按需）：alpha_flow margin/dragon_tiger/block_trade；fundamental consensus
 ```
 
+批量续跑（推荐）：
+
+```bash
+# 行情 / 公司行为
+python main.py core_market --p0 --universe HS300 --start 2026-07-01 --end 2026-07-23 --skip-existing --chunk-size 10
+python main.py core_market --kind corp_action --universe HS300 --start 2020-01-01 --end 2026-07-23 --skip-existing --chunk-size 10
+
+# 基本面 / 资金流
+python main.py alpha_fundamental --p1 --universe HS300 --start 2026-07-01 --skip-existing --chunk-size 10
+python main.py alpha_flow --p1 --universe HS300 --start 2024-08-01 --end 2024-08-16 --chunk-size 15
+```
+
 **就绪定义（量化）**：`core_ref` + `core_market` 的 **P0** kind 均 committed，且 DQ 对 CORE pass，才允许研究/回测消费该区间。P1/P2 kind 缺失不阻挡 CORE 就绪。
 
 ## 不变量

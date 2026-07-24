@@ -157,6 +157,14 @@ python main.py core_market --kind corp_action --start 2020-01-01 --end 2026-07-2
 > 维护约定：有可合并的功能/数据里程碑时，在本节**顶部**追加一条（新→旧）。  
 > 格式：日期 · 标题 · 要点列表 ·（可选）影响范围。
 
+### 2026-07-24 · Ingest 分块续跑优化
+
+- 新增 `shared/ingest_batching.py`：`chunk_symbols` / `resolve_symbols_from_args` / `should_chunk`
+- `core_market`：单 kind（含 `corp_action`）支持分块；`--skip-existing` 对 corp_action 按 `ex_date` 跳过
+- `alpha_fundamental`：`--universe` / `--chunked` / `--chunk-size` / `--skip-existing`；`run_p1_chunked`
+- `alpha_flow`：`--universe` / 分块；`run_p1_chunked`（northbound + stock_flow 分块）
+- 单 chunk 失败不中断后续块，便于 HS300 增量补数
+
 ### 2026-07-24 · 首推 GitHub 与主文档
 
 - 初始化 git，推送到 [CnOxx1/EvoQuantAAA](https://github.com/CnOxx1/EvoQuantAAA)（`main`）

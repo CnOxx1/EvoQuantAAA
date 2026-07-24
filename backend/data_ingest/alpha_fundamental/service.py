@@ -13,10 +13,12 @@ from data_ingest.alpha_fundamental.repository import FundamentalRepository
 from data_ingest.alpha_fundamental.sources import get_source
 from data_ingest.alpha_fundamental.sources.base import FundamentalSource
 from data_ingest.ingest_common.batch import BatchManager
+from shared.ingest_batching import chunk_symbols
 
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "alpha_fundamental"
+_SYMBOL_KINDS = frozenset({"statement", "indicator"})
 
 
 @dataclass
@@ -91,6 +93,39 @@ class FundamentalIngestService:
                 message=str(exc),
             )
 
+    def run_symbol_kind_chunked(
+        self,
+        request_base: FetchRequest,
+        *,
+        chunk_size: int = 15,
+    ) -> list[IngestResult]:
+        """statement/indicator 按标的分块；单 chunk 失败不中断。"""
+        if request_base.kind not in _SYMBOL_KINDS:
+            raise ValueError(f"{request_base.kind} 不支持按标的分块（可用单次 run）")
+        results: list[IngestResult] = []
+        offset = 0
+        for part in chunk_symbols(list(request_base.symbols), chunk_size):
+            req = FetchRequest(
+                kind=request_base.kind,  # type: ignore[arg-type]
+                start=request_base.start,
+                end=request_base.end,
+                symbols=part,
+                statement_types=list(request_base.statement_types),
+                job_id=request_base.job_id,
+            )
+            r = self.run(req)
+            results.append(r)
+            logger.info(
+                "alpha_fundamental chunk kind=%s [%s:%s] status=%s fetched=%s",
+                request_base.kind,
+                offset,
+                offset + len(part),
+                r.status,
+                r.fetched,
+            )
+            offset += len(part)
+        return results
+
     def run_p1(self, request_base: FetchRequest) -> list[IngestResult]:
         """P1：statement → indicator。"""
         results: list[IngestResult] = []
@@ -106,4 +141,24 @@ class FundamentalIngestService:
             results.append(self.run(req))
             if results[-1].status != "committed":
                 break
+        return results
+
+    def run_p1_chunked(
+        self,
+        request_base: FetchRequest,
+        *,
+        chunk_size: int = 15,
+    ) -> list[IngestResult]:
+        """P1 分块：每种 kind 按标的分块，chunk 失败不中断同 kind 后续块。"""
+        results: list[IngestResult] = []
+        for kind in P1_KINDS:
+            req = FetchRequest(
+                kind=kind,  # type: ignore[arg-type]
+                start=request_base.start,
+                end=request_base.end,
+                symbols=list(request_base.symbols),
+                statement_types=list(request_base.statement_types),
+                job_id=request_base.job_id,
+            )
+            results.extend(self.run_symbol_kind_chunked(req, chunk_size=chunk_size))
         return results

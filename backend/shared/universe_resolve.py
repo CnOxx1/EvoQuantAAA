@@ -83,3 +83,91 @@ def symbols_missing_equity_bars(
         if have.get(s, 0) < min_rows:
             missing.append(s)
     return missing
+
+
+def _symbols_missing_in_table(
+    symbols: list[str],
+    *,
+    table: str,
+    date_col: str,
+    start: str,
+    end: str,
+    min_rows: int = 1,
+) -> list[str]:
+    """通用：返回在日期区间内指定表行数不足的标的。"""
+    if not symbols:
+        return []
+    start, end = start[:10], end[:10]
+    missing: list[str] = []
+    chunk = 200
+    have: dict[str, int] = {}
+    with get_conn() as conn:
+        for i in range(0, len(symbols), chunk):
+            part = symbols[i : i + chunk]
+            ph = ",".join("?" * len(part))
+            rows = conn.execute(
+                f"""
+                SELECT symbol, COUNT(*) AS n
+                FROM {table}
+                WHERE {date_col}>=? AND {date_col}<=?
+                  AND symbol IN ({ph})
+                GROUP BY symbol
+                """,
+                (start, end, *part),
+            ).fetchall()
+            for r in rows:
+                have[str(r["symbol"])] = int(r["n"])
+    for s in symbols:
+        if have.get(s, 0) < min_rows:
+            missing.append(s)
+    return missing
+
+
+def symbols_missing_corp_action(
+    symbols: list[str],
+    *,
+    start: str,
+    end: str,
+    min_rows: int = 1,
+) -> list[str]:
+    """返回 [start,end] 内 raw_corp_action 行数不足的标的。"""
+    return _symbols_missing_in_table(
+        symbols,
+        table="raw_corp_action",
+        date_col="ex_date",
+        start=start,
+        end=end,
+        min_rows=min_rows,
+    )
+
+
+def symbols_missing_fund_statement(
+    symbols: list[str],
+    *,
+    min_rows: int = 1,
+) -> list[str]:
+    """返回 raw_fund_statement 中尚无足够行的标的（不按日期，便于 P1 续跑）。"""
+    if not symbols:
+        return []
+    missing: list[str] = []
+    chunk = 200
+    have: set[str] = set()
+    with get_conn() as conn:
+        for i in range(0, len(symbols), chunk):
+            part = symbols[i : i + chunk]
+            ph = ",".join("?" * len(part))
+            counts = conn.execute(
+                f"""
+                SELECT symbol, COUNT(*) AS n FROM raw_fund_statement
+                WHERE symbol IN ({ph})
+                GROUP BY symbol
+                """,
+                tuple(part),
+            ).fetchall()
+            for r in counts:
+                if int(r["n"]) >= min_rows:
+                    have.add(str(r["symbol"]))
+    for s in symbols:
+        if s not in have:
+            missing.append(s)
+    return missing

@@ -8,6 +8,7 @@ from data_ingest.alpha_flow.repository import FlowRepository
 from data_ingest.alpha_flow.sources import get_source
 from data_ingest.alpha_flow.sources.base import FlowSource
 from data_ingest.ingest_common.batch import BatchManager
+from shared.ingest_batching import chunk_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,35 @@ class FlowIngestService:
                 message=str(exc),
             )
 
+    def run_stock_flow_chunked(
+        self,
+        request_base: FetchRequest,
+        *,
+        chunk_size: int = 15,
+    ) -> list[IngestResult]:
+        """stock_flow 按标的分块；单 chunk 失败不中断。"""
+        results: list[IngestResult] = []
+        offset = 0
+        for part in chunk_symbols(list(request_base.symbols), chunk_size):
+            req = FetchRequest(
+                kind="stock_flow",
+                start=request_base.start,
+                end=request_base.end,
+                symbols=part,
+                job_id=request_base.job_id,
+            )
+            r = self.run(req)
+            results.append(r)
+            logger.info(
+                "alpha_flow chunk stock_flow [%s:%s] status=%s fetched=%s",
+                offset,
+                offset + len(part),
+                r.status,
+                r.fetched,
+            )
+            offset += len(part)
+        return results
+
     def run_p1(self, request_base: FetchRequest) -> list[IngestResult]:
         results: list[IngestResult] = []
         for kind in P1_KINDS:
@@ -99,4 +129,27 @@ class FlowIngestService:
             results.append(self.run(req))
             if results[-1].status != "committed":
                 break
+        return results
+
+    def run_p1_chunked(
+        self,
+        request_base: FetchRequest,
+        *,
+        chunk_size: int = 15,
+    ) -> list[IngestResult]:
+        """P1：northbound 一次 + stock_flow 分块。"""
+        results: list[IngestResult] = [
+            self.run(
+                FetchRequest(
+                    kind="northbound",
+                    start=request_base.start,
+                    end=request_base.end,
+                    symbols=[],
+                    job_id=request_base.job_id,
+                )
+            )
+        ]
+        results.extend(
+            self.run_stock_flow_chunked(request_base, chunk_size=chunk_size)
+        )
         return results

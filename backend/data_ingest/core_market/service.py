@@ -8,6 +8,7 @@ from data_ingest.core_market.repository import CoreMarketRepository
 from data_ingest.core_market.sources import get_source
 from data_ingest.core_market.sources.base import CoreMarketSource
 from data_ingest.ingest_common.batch import BatchManager
+from shared.ingest_batching import chunk_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,39 @@ class CoreMarketIngestService:
                 break
         return results
 
+    def run_symbol_kind_chunked(
+        self,
+        request_base: FetchRequest,
+        *,
+        chunk_size: int = 15,
+    ) -> list[IngestResult]:
+        """单 kind（需 symbols）分块提交；单 chunk 失败不中断后续。"""
+        if request_base.kind not in _SYMBOL_KINDS:
+            raise ValueError(f"{request_base.kind} 不支持按标的分块")
+        results: list[IngestResult] = []
+        offset = 0
+        for part in chunk_symbols(list(request_base.symbols), chunk_size):
+            req = FetchRequest(
+                kind=request_base.kind,  # type: ignore[arg-type]
+                start=request_base.start,
+                end=request_base.end,
+                symbols=part,
+                index_symbols=list(request_base.index_symbols),
+                job_id=request_base.job_id,
+            )
+            r = self.run(req)
+            results.append(r)
+            logger.info(
+                "core_market chunk kind=%s [%s:%s] status=%s fetched=%s",
+                request_base.kind,
+                offset,
+                offset + len(part),
+                r.status,
+                r.fetched,
+            )
+            offset += len(part)
+        return results
+
     def run_p0_chunked(
         self,
         request_base: FetchRequest,
@@ -122,33 +156,19 @@ class CoreMarketIngestService:
         覆盖型 P0：全市场类 kind 各跑一次；equity/adj 按 chunk 提交。
         单 chunk 失败不中断后续（便于 HS300 增量灌数）。
         """
-        if chunk_size < 1:
-            raise ValueError("chunk_size 必须 >= 1")
-        symbols = list(request_base.symbols)
         results: list[IngestResult] = []
 
         # 先灌逐票行情，再灌区间事件（事件不依赖 symbols）
         for kind in _PER_SYMBOL_P0:
-            for i in range(0, len(symbols), chunk_size):
-                part = symbols[i : i + chunk_size]
-                req = FetchRequest(
-                    kind=kind,  # type: ignore[arg-type]
-                    start=request_base.start,
-                    end=request_base.end,
-                    symbols=part,
-                    index_symbols=list(request_base.index_symbols),
-                    job_id=request_base.job_id,
-                )
-                r = self.run(req)
-                results.append(r)
-                logger.info(
-                    "core_market chunk kind=%s [%s:%s] status=%s fetched=%s",
-                    kind,
-                    i,
-                    i + len(part),
-                    r.status,
-                    r.fetched,
-                )
+            req = FetchRequest(
+                kind=kind,  # type: ignore[arg-type]
+                start=request_base.start,
+                end=request_base.end,
+                symbols=list(request_base.symbols),
+                index_symbols=list(request_base.index_symbols),
+                job_id=request_base.job_id,
+            )
+            results.extend(self.run_symbol_kind_chunked(req, chunk_size=chunk_size))
 
         for kind in _MARKET_WIDE_P0:
             req = FetchRequest(

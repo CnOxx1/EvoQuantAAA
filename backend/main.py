@@ -9,8 +9,9 @@ from __future__ import annotations
   python main.py core_ref --kind calendar --start 2026-07-01 --end 2026-07-31
   python main.py core_ref --p0 --start 2026-07-01 --end 2026-07-31 --source akshare
   python main.py core_market --p0 --start 2026-07-21 --end 2026-07-23 --symbol 600000 --symbol 000001
-  python main.py alpha_fundamental --p1 --symbol 600000 --statement-type INCOME
-  python main.py alpha_flow --p1 --start 2024-08-01 --end 2024-08-16 --symbol 600000
+  python main.py alpha_fundamental --p1 --universe HS300 --start 2026-07-01 --skip-existing --chunk-size 10
+  python main.py alpha_flow --p1 --start 2024-08-01 --end 2024-08-16 --universe HS300 --chunk-size 15
+  python main.py core_market --kind corp_action --universe HS300 --start 2020-01-01 --end 2026-07-23 --skip-existing
   python main.py alpha_news_monitor --kind news_incremental
   python main.py alpha_announcement --kind ann_incremental --source eastmoney
   python main.py data_process --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
@@ -329,44 +330,56 @@ def cmd_core_market(args: argparse.Namespace) -> int:
     from data_ingest.core_market.models import FetchRequest
     from data_ingest.core_market.service import CoreMarketIngestService
     from data_ingest.core_market.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args, should_chunk
     from shared.universe_resolve import (
-        resolve_universe_symbols,
+        symbols_missing_corp_action,
         symbols_missing_equity_bars,
     )
 
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
     indexes = [s.strip() for s in (args.index or []) if s.strip()]
-    if args.universe:
-        if not args.start:
-            print("status=invalid message=--universe 需要 --start（点时）")
-            return 2
-        sid, uni_symbols = resolve_universe_symbols(
-            universe_code=args.universe,
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=args.universe,
+            symbols=symbols,
             as_of=args.universe_as_of or args.start,
             as_of_end=args.end,
         )
-        if not uni_symbols:
-            print(f"status=invalid message=Universe {args.universe} 无成员快照")
-            return 2
-        print(f"universe={args.universe} snapshot_id={sid} members={len(uni_symbols)}")
-        symbols = uni_symbols if not symbols else [s for s in symbols if s in set(uni_symbols)]
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if args.universe:
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
 
+    kind = args.kind or "equity_1d"
     if args.skip_existing and args.start and args.end and symbols:
         before = len(symbols)
-        symbols = symbols_missing_equity_bars(
-            symbols, start=args.start, end=args.end, min_rows=1
-        )
-        print(f"skip_existing: keep {len(symbols)}/{before} missing equity bars")
+        if kind == "corp_action" and not args.p0:
+            symbols = symbols_missing_corp_action(
+                symbols, start=args.start, end=args.end, min_rows=1
+            )
+            print(f"skip_existing: keep {len(symbols)}/{before} missing corp_action")
+        else:
+            symbols = symbols_missing_equity_bars(
+                symbols, start=args.start, end=args.end, min_rows=1
+            )
+            print(f"skip_existing: keep {len(symbols)}/{before} missing equity bars")
 
     source = get_source(args.source)
     service = CoreMarketIngestService(source=source)
     base = FetchRequest(
-        kind=args.kind or "equity_1d",
+        kind=kind,  # type: ignore[arg-type]
         start=args.start,
         end=args.end,
         symbols=symbols,
         index_symbols=indexes,
         job_id=args.job_id,
+    )
+    chunking = should_chunk(
+        symbols,
+        chunked=args.chunked,
+        universe=args.universe,
+        chunk_size=args.chunk_size,
     )
     try:
         if args.p0:
@@ -380,9 +393,9 @@ def cmd_core_market(args: argparse.Namespace) -> int:
                 print("skip_existing: 无需补 equity/adj，仅刷新 suspend/limit/index")
                 base.symbols = []
                 results = []
-                for kind in ("suspend", "limit", "index_1d"):
+                for mk in ("suspend", "limit", "index_1d"):
                     req = FetchRequest(
-                        kind=kind,  # type: ignore[arg-type]
+                        kind=mk,  # type: ignore[arg-type]
                         start=args.start,
                         end=args.end,
                         symbols=[],
@@ -390,12 +403,11 @@ def cmd_core_market(args: argparse.Namespace) -> int:
                         job_id=args.job_id,
                     )
                     results.append(service.run(req))
-            elif args.chunked or args.universe or len(symbols) > 30:
+            elif chunking:
                 results = service.run_p0_chunked(base, chunk_size=args.chunk_size)
             else:
                 results = service.run_p0(base)
-            ok = True
-            committed = 0
+            committed = sum(1 for r in results if r.status == "committed")
             for r in results:
                 print(
                     f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
@@ -403,21 +415,36 @@ def cmd_core_market(args: argparse.Namespace) -> int:
                 )
                 if r.message:
                     print(f"message={r.message}")
-                if r.status == "committed":
-                    committed += 1
-                elif r.kind in ("suspend", "limit", "index_1d"):
-                    ok = False
-            # 分块模式下允许部分 equity/adj chunk 失败
-            if args.chunked or args.universe or len(base.symbols) > 30:
-                ok = committed > 0
-            else:
-                ok = all(r.status == "committed" for r in results)
+            ok = committed > 0 if chunking else all(
+                r.status == "committed" for r in results
+            )
             print(f"summary committed_batches={committed}/{len(results)}")
             return 0 if ok else 2
 
         if not args.kind:
             print("status=invalid message=请指定 --kind 或使用 --p0")
             return 2
+        if kind in {"equity_1d", "adj_factor", "corp_action"}:
+            if not symbols:
+                if args.skip_existing:
+                    print("skip_existing: 无需补数，退出")
+                    return 0
+                print("status=invalid message=该 kind 需要 --symbol 或 --universe")
+                return 2
+            if chunking:
+                results = service.run_symbol_kind_chunked(
+                    base, chunk_size=args.chunk_size
+                )
+                committed = sum(1 for r in results if r.status == "committed")
+                for r in results:
+                    print(
+                        f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
+                        f"fetched={r.fetched} inserted={r.inserted} updated={r.updated}"
+                    )
+                    if r.message:
+                        print(f"message={r.message}")
+                print(f"summary committed_batches={committed}/{len(results)}")
+                return 0 if committed > 0 else 2
         result = service.run(base)
     except ValueError as exc:
         print(f"status=invalid message={exc}")
@@ -469,8 +496,22 @@ def cmd_alpha_flow(args: argparse.Namespace) -> int:
     from data_ingest.alpha_flow.models import FetchRequest
     from data_ingest.alpha_flow.service import FlowIngestService
     from data_ingest.alpha_flow.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args, should_chunk
 
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.start,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
+
     source = get_source(args.source)
     service = FlowIngestService(source=source)
     base = FetchRequest(
@@ -480,16 +521,26 @@ def cmd_alpha_flow(args: argparse.Namespace) -> int:
         symbols=symbols,
         job_id=args.job_id,
     )
+    chunking = should_chunk(
+        symbols,
+        chunked=getattr(args, "chunked", False),
+        universe=getattr(args, "universe", None),
+        chunk_size=getattr(args, "chunk_size", 15),
+    )
     try:
         if args.p1:
             if not (args.start and args.end):
                 print("status=invalid message=--p1 需要 --start 与 --end")
                 return 2
             if not symbols:
-                print("status=invalid message=--p1 需要至少一个 --symbol")
+                print("status=invalid message=--p1 需要 --symbol 或 --universe")
                 return 2
-            results = service.run_p1(base)
-            ok = True
+            results = (
+                service.run_p1_chunked(base, chunk_size=args.chunk_size)
+                if chunking
+                else service.run_p1(base)
+            )
+            committed = sum(1 for r in results if r.status == "committed")
             for r in results:
                 print(
                     f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
@@ -497,12 +548,32 @@ def cmd_alpha_flow(args: argparse.Namespace) -> int:
                 )
                 if r.message:
                     print(f"message={r.message}")
-                ok = ok and r.status == "committed"
+            ok = committed > 0 if chunking else all(
+                r.status == "committed" for r in results
+            )
+            print(f"summary committed_batches={committed}/{len(results)}")
             return 0 if ok else 2
 
         if not args.kind:
             print("status=invalid message=请指定 --kind 或使用 --p1")
             return 2
+        if args.kind == "stock_flow" and chunking:
+            if not symbols:
+                print("status=invalid message=stock_flow 需要 --symbol 或 --universe")
+                return 2
+            results = service.run_stock_flow_chunked(
+                base, chunk_size=args.chunk_size
+            )
+            committed = sum(1 for r in results if r.status == "committed")
+            for r in results:
+                print(
+                    f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
+                    f"fetched={r.fetched} inserted={r.inserted} updated={r.updated}"
+                )
+                if r.message:
+                    print(f"message={r.message}")
+            print(f"summary committed_batches={committed}/{len(results)}")
+            return 0 if committed > 0 else 2
         result = service.run(base)
     except ValueError as exc:
         print(f"status=invalid message={exc}")
@@ -521,9 +592,29 @@ def cmd_alpha_fundamental(args: argparse.Namespace) -> int:
     from data_ingest.alpha_fundamental.models import FetchRequest
     from data_ingest.alpha_fundamental.service import FundamentalIngestService
     from data_ingest.alpha_fundamental.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args, should_chunk
+    from shared.universe_resolve import symbols_missing_fund_statement
 
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
     statement_types = [s.strip() for s in (args.statement_type or []) if s.strip()]
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.start or args.end,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
+
+    if getattr(args, "skip_existing", False) and symbols:
+        before = len(symbols)
+        symbols = symbols_missing_fund_statement(symbols, min_rows=1)
+        print(f"skip_existing: keep {len(symbols)}/{before} missing fund_statement")
+
     source = get_source(args.source)
     service = FundamentalIngestService(source=source)
     base = FetchRequest(
@@ -534,13 +625,26 @@ def cmd_alpha_fundamental(args: argparse.Namespace) -> int:
         statement_types=statement_types,
         job_id=args.job_id,
     )
+    chunking = should_chunk(
+        symbols,
+        chunked=getattr(args, "chunked", False),
+        universe=getattr(args, "universe", None),
+        chunk_size=getattr(args, "chunk_size", 15),
+    )
     try:
         if args.p1:
             if not symbols:
-                print("status=invalid message=--p1 需要至少一个 --symbol")
+                if getattr(args, "skip_existing", False):
+                    print("skip_existing: 无需补数，退出")
+                    return 0
+                print("status=invalid message=--p1 需要 --symbol 或 --universe")
                 return 2
-            results = service.run_p1(base)
-            ok = True
+            results = (
+                service.run_p1_chunked(base, chunk_size=args.chunk_size)
+                if chunking
+                else service.run_p1(base)
+            )
+            committed = sum(1 for r in results if r.status == "committed")
             for r in results:
                 print(
                     f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
@@ -548,12 +652,36 @@ def cmd_alpha_fundamental(args: argparse.Namespace) -> int:
                 )
                 if r.message:
                     print(f"message={r.message}")
-                ok = ok and r.status == "committed"
+            ok = committed > 0 if chunking else all(
+                r.status == "committed" for r in results
+            )
+            print(f"summary committed_batches={committed}/{len(results)}")
             return 0 if ok else 2
 
         if not args.kind:
             print("status=invalid message=请指定 --kind 或使用 --p1")
             return 2
+        if args.kind in {"statement", "indicator"}:
+            if not symbols:
+                if getattr(args, "skip_existing", False):
+                    print("skip_existing: 无需补数，退出")
+                    return 0
+                print("status=invalid message=该 kind 需要 --symbol 或 --universe")
+                return 2
+            if chunking:
+                results = service.run_symbol_kind_chunked(
+                    base, chunk_size=args.chunk_size
+                )
+                committed = sum(1 for r in results if r.status == "committed")
+                for r in results:
+                    print(
+                        f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
+                        f"fetched={r.fetched} inserted={r.inserted} updated={r.updated}"
+                    )
+                    if r.message:
+                        print(f"message={r.message}")
+                print(f"summary committed_batches={committed}/{len(results)}")
+                return 0 if committed > 0 else 2
         result = service.run(base)
     except ValueError as exc:
         print(f"status=invalid message={exc}")
@@ -681,7 +809,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mkt.add_argument(
         "--skip-existing",
         action="store_true",
-        help="跳过区间内已有 raw_equity_bar_1d 的标的",
+        help="跳过已有数据：P0/equity 看 raw_equity_bar_1d；corp_action 看 raw_corp_action",
     )
     p_mkt.add_argument(
         "--index",
@@ -710,6 +838,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_fund.add_argument("--start", help="按公告日/报告期过滤 YYYY-MM-DD")
     p_fund.add_argument("--end", help="按公告日/报告期过滤 YYYY-MM-DD")
     p_fund.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
+    p_fund.add_argument(
+        "--universe",
+        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        help="从 Universe 快照取标的；可与 --symbol 求交",
+    )
+    p_fund.add_argument(
+        "--universe-as-of",
+        help="Universe 点时日，默认 --start 或 --end",
+    )
+    p_fund.add_argument(
+        "--chunked",
+        action="store_true",
+        help="statement/indicator 分块提交；--universe 或标的>30 时自动开启",
+    )
+    p_fund.add_argument("--chunk-size", type=int, default=15)
+    p_fund.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="跳过已有 raw_fund_statement 的标的",
+    )
     p_fund.add_argument(
         "--statement-type",
         action="append",
@@ -744,6 +892,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_flow.add_argument("--start", help="YYYY-MM-DD")
     p_flow.add_argument("--end", help="YYYY-MM-DD")
     p_flow.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
+    p_flow.add_argument(
+        "--universe",
+        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        help="从 Universe 快照取标的（stock_flow/p1 需要）",
+    )
+    p_flow.add_argument(
+        "--universe-as-of",
+        help="Universe 点时日，默认 --start",
+    )
+    p_flow.add_argument(
+        "--chunked",
+        action="store_true",
+        help="stock_flow 分块提交；--universe 或标的>30 时自动开启",
+    )
+    p_flow.add_argument("--chunk-size", type=int, default=15)
     p_flow.add_argument("--job-id", default=None)
     p_flow.set_defaults(func=cmd_alpha_flow)
 
