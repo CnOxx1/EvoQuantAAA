@@ -1,0 +1,21 @@
+# 生产/联调可用的 PostgreSQL（可选；本地默认也可不设 URL，用嵌入式 pgembed）
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ashare-postgres
+    environment:
+      POSTGRES_USER: ashare
+      POSTGRES_PASSWORD: ashare
+      POSTGRES_DB: ashare
+    ports:
+      - "5432:5432"
+    volumes:
+      - ashare_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ashare -d ashare"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ashare_pg_data:
