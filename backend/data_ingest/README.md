@@ -34,6 +34,8 @@
 | ALPHA | alpha_flow | `alpha_flow/` | P1 | 资金 + 两融/龙虎榜/大宗(P2) | 见下 |
 | ALPHA | alpha_announcement | `alpha_announcement/` | P1 | 法定公告监控/回填 | `ann_incremental` / `ann_watchlist` / `ann_backfill` / `ann_by_category`(P2) |
 | ALPHA | alpha_news_monitor | `alpha_news_monitor/` | P1 | 新闻/快讯/论坛情绪/政策语境 | `news_*`（见下） |
+| ALPHA | alpha_contract | `alpha_contract/` | P1 | 重大合同 / 中标事件 | `win_bid` / `major_contract` |
+| ALPHA | alpha_relation | `alpha_relation/` | P1 | 个股关系边（图谱） | `hot_relate` / `holder_team` / `board_co` |
 
 ### core_ref kinds
 
@@ -78,6 +80,25 @@
 | `news_policy` | P1 | `raw_news_media` | 政策语境（早餐/财新/EPU + 可选 CCTV/经济日历/财联社政策过滤）；`policy_tags`/`tone_hint` |
 
 明细与接口映射见 `alpha_news_monitor/README.md`。法定公告仍在 `alpha_announcement`，禁止混表。
+
+### alpha_contract kinds
+
+| ingest_kind | 优先级 | 输出 | 量化用途 |
+| --- | --- | --- | --- |
+| `win_bid` | P1 | `raw_major_contract` | 中标/中选事件（金额、对手方、公告日） |
+| `major_contract` | P1 | `raw_major_contract` | 东财重大合同全量（含非中标类） |
+
+明细见 `alpha_contract/README.md`。源：`stock_zdhtmx_em`。
+
+### alpha_relation kinds
+
+| ingest_kind | 优先级 | 输出 | 量化用途 |
+| --- | --- | --- | --- |
+| `hot_relate` | P1 | `raw_stock_relation` | 人气相关股边（图谱主路径） |
+| `holder_team` | P1 | `raw_stock_relation` | 股东协同共持边 |
+| `board_co` | P1 | `raw_stock_relation` | 同概念/同行业共板边 |
+
+明细见 `alpha_relation/README.md`。
 
 ## 明确暂不新建的模块
 
@@ -154,6 +175,15 @@ python main.py alpha_flow --kind dragon_tiger --start 2026-07-01 --end 2026-07-2
 python main.py alpha_news_monitor --kind news_official --media cls --media cjzc
 python main.py alpha_news_monitor --kind news_forum --forum-top-n 50
 python main.py alpha_news_monitor --kind news_policy
+
+# 中标 / 重大合同（结构化 + 公告披露双源）
+python main.py alpha_contract --kind win_bid --start 2026-07-01 --end 2026-07-25
+python main.py alpha_contract --kind major_contract --start 2026-07-01 --end 2026-07-25 --universe TOP100
+python main.py alpha_announcement --kind ann_by_category --category win_bid --start 2026-07-24 --end 2026-07-24
+
+# 个股关系图谱边
+python main.py alpha_relation --kind hot_relate --universe TOP100 --end 2026-07-25
+python main.py alpha_relation --kind holder_team --holder-type 社保 --universe TOP100
 
 # 交易日增量（CORE → process → DQ；--with-alpha 含估值/龙虎榜）
 python main.py daily --universe TOP100 --as-of 2026-07-23

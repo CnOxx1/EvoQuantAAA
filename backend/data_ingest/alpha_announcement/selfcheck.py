@@ -48,6 +48,13 @@ def main() -> int:
     r5 = svc.run(FetchRequest(kind="ann_by_category", categories=["investigation"]))
     assert r5.status == "committed" and r5.fetched == 1, r5
 
+    r6 = svc.run(FetchRequest(kind="ann_by_category", categories=["win_bid"]))
+    assert r6.status == "committed" and r6.fetched == 1, r6  # 仅标题含中标
+
+    r7 = svc.run(FetchRequest(kind="ann_by_category", categories=["major_contract"]))
+    # major_contract 桶含 win_bid + 纯重大合同
+    assert r7.status == "committed" and r7.fetched == 2, r7
+
     try:
         svc.run(FetchRequest(kind="ann_watchlist"))
         raise AssertionError("expected ValueError")
@@ -56,7 +63,8 @@ def main() -> int:
 
     total = AnnouncementRepository().count_announcements()
     print(
-        f"selfcheck OK: batches committed, watermark works, ann_count_mock_related>={total}"
+        f"selfcheck OK: batches committed, watermark works, "
+        f"win_bid/major_contract filters ok, ann_count>={total}"
     )
     return 0
 

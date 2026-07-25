@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-StrategyCode = Literal["EW_HOLD"]
+StrategyCode = Literal["EW_HOLD", "EW_REBALANCE", "FACTOR_TOP_N"]
 
 
 @dataclass
@@ -28,6 +28,9 @@ class BacktestRequest:
     benchmark_index: str = "000300"
     initial_cash: float = 1_000_000.0
     require_dq: bool = True
+    rebalance_days: int = 0
+    research_factor: str | None = None
+    top_n: int = 20
     job_id: str | None = None
 
 

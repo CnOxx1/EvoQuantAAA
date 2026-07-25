@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from data_ingest.alpha_announcement.category import normalize_category
+from data_ingest.alpha_announcement.category import (
+    matches_requested_categories,
+    normalize_category,
+)
 from data_ingest.alpha_announcement.models import AnnouncementRecord, FetchRequest
 from data_ingest.alpha_announcement.sources.base import AnnouncementSource, FetchResult
 from data_ingest.alpha_announcement.timeutil import normalize_publish_time
@@ -21,6 +24,8 @@ class MockAnnouncementSource(AnnouncementSource):
         ("000001", "2025年业绩预告", "业绩预告", "2026-07-21T03:00:00+00:00"),
         ("300750", "立案调查通知书", "立案调查", "2026-07-22T04:00:00+00:00"),
         ("601318", "回购股份方案公告", "回购", "2026-07-23T05:00:00+00:00"),
+        ("600284", "浦东建设重大项目中标公告", "重大合同", "2026-07-24T06:00:00+00:00"),
+        ("002428", "关于签署日常经营重大合同的公告", "重大合同", "2026-07-24T07:00:00+00:00"),
     )
 
     def fetch(self, request: FetchRequest, *, since: str | None = None) -> FetchResult:
@@ -41,9 +46,12 @@ class MockAnnouncementSource(AnnouncementSource):
             if end_n and publish_n > end_n:
                 continue
             norm = normalize_category(cat, title)
-            if request.categories:
-                if norm not in request.categories and cat not in request.categories:
-                    continue
+            if request.categories and not matches_requested_categories(
+                category_norm=norm,
+                category_raw=cat,
+                requested=request.categories,
+            ):
+                continue
             ann_id = hashlib.sha1(f"{symbol}|{title}|{publish_n}".encode()).hexdigest()[:16]
             records.append(
                 AnnouncementRecord(

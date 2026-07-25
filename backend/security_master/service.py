@@ -89,11 +89,15 @@ class SecurityMasterService:
         st_map = self.repo.load_st_map(as_of=as_of)
         index_rows: list[dict[str, Any]] = []
         index_set: set[str] = set()
+        member_effective_date = None
+        member_asof_fallback = False
         if request.universe_code in ("HS300", "HS300_EX_ST"):
-            index_rows = self.repo.load_index_members(
-                index_symbol=request.index_symbol,
-                as_of=as_of,
-                preferred_source=request.preferred_source,
+            index_rows, member_effective_date, member_asof_fallback = (
+                self.repo.load_index_members(
+                    index_symbol=request.index_symbol,
+                    as_of=as_of,
+                    preferred_source=request.preferred_source,
+                )
             )
             index_set = {str(r["symbol"]) for r in index_rows}
             if not index_set:
@@ -142,6 +146,8 @@ class SecurityMasterService:
             "listing_count": len(listings),
             "st_active_count": len(st_map),
             "index_member_count": len(index_set),
+            "member_effective_date": member_effective_date,
+            "member_asof_fallback": member_asof_fallback,
             "share_capital_count": len(shares),
             "close_quote_count": len(closes),
             **rank_meta,

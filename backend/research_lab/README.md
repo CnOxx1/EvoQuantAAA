@@ -1,46 +1,55 @@
 # research_lab
 
 ## 名称
-研究实验区：因子/信号试算与实验记录；产出默认不可直接实盘。
+研究实验区：基线因子计算、落库与 IC/分层评估；产出默认不可直接实盘。
 
 ## 生产数据与落库表
 
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
-| 实验因子/信号/元数据 | `research_*` | 实验任务完成时；不可直接进实盘 |
+| 因子值 | `research_factor_value` | `research` 计算任务 UPSERT（幂等） |
+| 实验运行 | `research_run` | 计算/评估任务元数据 + `meta_json` |
 
+迁移：`database/migrations/017_research_lab.sql`。
 
-## 本目录模块一览
-无子模块；本目录即单一业务模块实现。
+## 基线因子
+
+| factor_code | 定义 | 数据源（点时） |
+| --- | --- | --- |
+| `MOM_20` | `adj_close_t / adj_close_{t-20} - 1` | `processed_equity_bar_1d` |
+| `VAL_PE_PCT` | 当日 Universe 内 PE-TTM 截面分位；PE≤0→最差档 1.0 | `raw_valuation_1d.pe_ttm` |
+| `FLOW_NET_5` | 近 5 日主力净流入之和 / 近 5 日成交额之和 | `raw_money_flow`（STOCK_FLOW）+ 日线 `amount` |
 
 ## 协作模块索引（供 AI Agent）
 
 | 模块 | README | 主要作用 | 与本模块关系 |
 | --- | --- | --- | --- |
-| backend（父） | `../README.md` | 总览 | 父目录 |
-| database | `../../database/README.md` | 实验表契约 | 上游契约 |
-| data_quality | `../data_quality/README.md` | DQ | 上游门禁 |
-| data_process | `../data_process/README.md` | 加工数据 | 上游（经库） |
-| security_master | `../security_master/README.md` | Universe | 过滤标的 |
-| strategy_registry | `../strategy_registry/README.md` | 晋升 | 下游（登记实验版本） |
-| signal_prod | `../signal_prod/README.md` | 生产信号 | 不得直连；须经晋升 |
-| backtest | `../backtest/README.md` | 回测 | 可消费实验信号做研究 |
-| frontend/research | `../../frontend/research/README.md` | 研究 UI | 下游展示 |
+| data_process | `../data_process/README.md` | processed 行情 | 上游（经库） |
+| data_quality | `../data_quality/README.md` | dq_gate | 默认要求 passed |
+| security_master | `../security_master/README.md` | Universe 快照 | 过滤标的 |
+| alpha_fundamental / alpha_flow | `../data_ingest/...` | 估值/资金 raw | 上游（经库） |
+| backtest | `../backtest/README.md` | 回测 | `FACTOR_TOP_N` 经库读本表；禁止互相 import |
 
 ## 边界
-- 做：实验计算、写 `research_*` 结果与元数据；申请晋升。
-- 不做：直接写生产信号表；调用 execution；绕过 DQ。
-
-## 输入
-- DQ=pass 的 `processed_*`、`universe_snapshot_id`、实验参数
-
-## 输出
-- 实验因子/信号表、实验 `run_id`
-- 向 registry 提交的晋升申请（引用）
+- 做：因子纯函数计算、落库、IC/分层评估；写 `research_*`。
+- 不做：通用因子框架；直接写生产信号；调用 execution；绕过 DQ（除非显式 `--no-dq-check`）。
 
 ## 运行
-- 研究任务经 api_gateway / orchestrator；环境偏 `research`
+
+```bash
+cd backend
+python main.py migrate
+# 计算（短窗冒烟）
+python main.py research --factor MOM_20 --universe TOP100 --start 2026-06-01 --end 2026-07-23
+python main.py research --factor VAL_PE_PCT --universe TOP100 --start 2026-06-01 --end 2026-07-23
+python main.py research --factor FLOW_NET_5 --universe TOP100 --start 2026-06-01 --end 2026-07-23
+# 评估（需已有因子值；t 日因子对 t+1 ret_1d）
+python main.py research --factor MOM_20 --evaluate --universe TOP100 --start 2026-06-01 --end 2026-07-23
+python -m research_lab.selfcheck
+python -m pytest tests/test_research_factors.py -q
+```
 
 ## 不变量
-- 禁止未来函数（PIT）
+- 禁止未来函数：动量用历史 adj_close；评估严禁同日收益
+- 默认 `dq_gate=passed` 才可研究消费
 - 实验产出不得被 execution 直接消费

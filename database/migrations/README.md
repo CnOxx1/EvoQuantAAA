@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`014`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`018`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -21,6 +21,10 @@
 | `012_market_microstructure.sql` | `raw_abnormal_move`、`raw_dragon_tiger_seat` |
 | `013_ingest_enhancements.sql` | `raw_valuation_1d`、`raw_board_bar_1d`、`raw_restricted_release`、`raw_holder_count` |
 | `014_news_sentiment.sql` | `raw_news_media.content_type` / `extra_json`（官方快讯/论坛情绪/政策语境） |
+| `015_alpha_contract.sql` | `raw_major_contract`（重大合同 / 中标） |
+| `016_alpha_relation.sql` | `raw_stock_relation`（个股关系边 / 图谱） |
+| `017_research_lab.sql` | `research_run`、`research_factor_value`（基线因子） |
+| `018_phase3_pit_correctness.sql` | `processed_fund_snapshot`（基本面 PIT 区间） |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

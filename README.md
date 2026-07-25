@@ -36,6 +36,7 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 ```text
 大a / EvoQuantAAA
 ├── ARCHITECTURE_PRINCIPLES.md   # 强制架构原则
+├── DEVELOPMENT_PLAN.md          # 分阶段开发任务书（交接 Agent）
 ├── README.md                    # 本文件：总览 + 开发更新记录
 ├── docker-compose.yml
 ├── frontend/                    # UI（不直连库，经 api_gateway）
@@ -45,10 +46,11 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 │   ├── data_quality/            # DQ 门禁
 │   ├── security_master/         # Universe 日快照
 │   ├── backtest/                # A 股约束回测
+│   ├── tests/                   # pytest（不连库）
 │   ├── shared/                  # DB / 配置 / Universe 解析等
 │   └── …（orchestrator、research_lab、risk_engine 等骨架）
 ├── database/
-│   ├── migrations/              # 001–014 SQL（权威演进）
+│   ├── migrations/              # 001–018 SQL（权威演进）
 │   ├── schema/                  # 产消契约说明
 │   └── seeds/
 └── scripts/                     # 辅助脚本
@@ -79,18 +81,19 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 
 | 阶段 | 模块 | 状态摘要 |
 | --- | --- | --- |
-| 契约 | `database/migrations` 001–014 | 已应用 |
+| 契约 | `database/migrations` 001–018 | 已应用 |
 | CORE 参考 | `core_ref` | 日历/上市/行业/股本/成分/ST/解禁 |
 | CORE 行情 | `core_market` | 日线、复权、停牌、涨跌停、指数、公司行为、市场排名、盘口异动、板块日线；TOP100 长窗样本已 DQ pass |
-| 加工 | `data_process` | 复权价、`ret_1d`、`can_buy`/`can_sell` |
-| 门禁 | `data_quality` | CORE 规则 + `dq_gate` |
+| 加工 | `data_process` | 复权/掩码；涨跌停价格推导；`fundamental_pit` |
+| 门禁 | `data_quality` | CORE（含除权校验）+ ALPHA 报告（不进 gate） |
 | Universe | `security_master` | 默认 `TOP100` / `SECTOR_LEADERS`（全市场仅按需） |
-| 回测 | `backtest` | `EW_HOLD` + 成本参数 + NAV/成交 |
-| ALPHA | announcement / fundamental / flow / news | 财报估值股东、资金两融龙虎榜、公告、新闻快讯/论坛情绪/政策语境（`news_policy`） |
+| 回测 | `backtest` | `EW_HOLD` / `EW_REBALANCE` / `FACTOR_TOP_N`；T+1、印花税、整手 |
+| 研究 | `research_lab` | 基线因子落库 + RankIC/分层；经库对接回测 |
+| ALPHA | announcement / fundamental / flow / news / contract / relation | 财报估值股东、资金两融龙虎榜、公告、新闻/政策、合同中标、个股关系边（图谱） |
 
 ### 3.2 骨架/待建
 
-`orchestrator`、`research_lab`、`signal_prod`、`strategy_registry`、`portfolio_construct`、`risk_engine`、`execution`、`ledger`、`ops_monitor`、`api_gateway`、多数 `frontend/*`。
+`orchestrator`、`signal_prod`、`strategy_registry`、`portfolio_construct`、`risk_engine`、`execution`、`ledger`、`ops_monitor`、`api_gateway`、多数 `frontend/*`。
 
 ---
 
@@ -175,6 +178,33 @@ python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
 
 > 维护约定：有可合并的功能/数据里程碑时，在本节**顶部**追加一条（新→旧）。  
 > 格式：日期 · 标题 · 要点列表 ·（可选）影响范围。
+
+### 2026-07-25 · PIT 与数据正确性（阶段 3）
+
+- `018`：`processed_fund_snapshot`（公告日区间 PIT；`fundamental_pit`）
+- CORE DQ：`corp_action_adj_check`（除权价交叉，warn）
+- Universe：成分 `member_effective_date` 审计；`as_of` 取 `trade_date<=as_of` 最近一期
+- 涨跌停：`raw_limit_board` 缺失时价格推导（主板/创业板/ST）
+- ALPHA DQ：估值/资金流/新闻轻量规则，不写 `dq_gate`
+
+### 2026-07-25 · 研究闭环（阶段 2）：因子 → IC → FACTOR_TOP_N 回测
+
+- 迁移 `017_research_lab.sql`：`research_factor_value` / `research_run`
+- 因子：`MOM_20` / `VAL_PE_PCT` / `FLOW_NET_5`；`--evaluate` 为 t→t+1 RankIC / 5 分位
+- 回测：`FACTOR_TOP_N --factor MOM_20 --top-n 20 --rebalance-days 20`（经库读因子，调仓用前一日值）
+- 默认 `dq_gate=passed`；模块间不互相 import，只经库交接
+
+### 2026-07-25 · 回测撮合引擎（阶段 1）+ pytest/CI
+
+- `backtest`：通用 `run_target_weights`（T+1 / `can_sell` / 卖出印花税 / 先卖后买）；`EW_HOLD` 改挂新引擎；新增 `EW_REBALANCE --rebalance-days`
+- `backend/tests/`：engine / process compute / DQ rules 纯函数单测；GitHub Actions CI
+- 开发路线见根目录 `DEVELOPMENT_PLAN.md`
+
+### 2026-07-25 · 个股关系边 + 中标双源（contract / announcement / relation）
+
+- `alpha_relation`：`hot_relate` / `holder_team` / `board_co` → `raw_stock_relation`（迁移 `016`）
+- `alpha_contract`：`win_bid` / `major_contract` → `raw_major_contract`（迁移 `015`；源 `stock_zdhtmx_em`）
+- `alpha_announcement`：`category_norm` 增 `win_bid` / `major_contract`；巨潮 `searchkey`；与合同表双源交叉
 
 ### 2026-07-25 · 新闻官方快讯 + 论坛情绪 + 政策语境
 

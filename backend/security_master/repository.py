@@ -177,9 +177,14 @@ class SecurityMasterRepository:
 
     def load_index_members(
         self, *, index_symbol: str, as_of: str, preferred_source: str
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        """
+        点时成分：取 trade_date <= as_of 的最近一期。
+        若无（本地仅有一期且日期晚于 as_of），回退该期并标记 fallback=True。
+        返回 (members, member_effective_date, used_fallback)。
+        """
+        used_fallback = False
         with get_conn() as conn:
-            # 取 as_of 及之前最近一个成分日
             day = conn.execute(
                 """
                 SELECT MAX(trade_date) AS d FROM raw_index_member
@@ -197,8 +202,9 @@ class SecurityMasterRepository:
                     (index_symbol,),
                 ).fetchone()
                 trade_date = day["d"] if day else None
+                used_fallback = trade_date is not None
             if not trade_date:
-                return []
+                return [], None, False
             rows = [
                 dict(r)
                 for r in conn.execute(
@@ -210,13 +216,12 @@ class SecurityMasterRepository:
                     (index_symbol, trade_date),
                 ).fetchall()
             ]
-        # 同键多源去重
         best: dict[str, dict[str, Any]] = {}
         for r in rows:
             sym = str(r["symbol"])
             if sym not in best or r.get("source") == preferred_source:
                 best[sym] = r
-        return list(best.values())
+        return list(best.values()), str(trade_date)[:10], used_fallback
 
     def replace_snapshot(
         self,

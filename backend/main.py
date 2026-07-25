@@ -26,6 +26,9 @@ from __future__ import annotations
   python main.py alpha_fundamental --kind holder --universe TOP100 --chunk-size 10
   python main.py core_ref --kind restricted_release --start 2026-07-01 --end 2026-07-23
   python main.py daily --universe TOP100 --as-of 2026-07-23
+  python main.py alpha_contract --kind win_bid --start 2026-07-01 --end 2026-07-25
+  python main.py alpha_announcement --kind ann_by_category --category win_bid --start 2026-07-24 --end 2026-07-24
+  python main.py alpha_relation --kind hot_relate --universe TOP100 --end 2026-07-25
 """
 
 import argparse
@@ -74,6 +77,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
                 benchmark_index=args.benchmark,
                 initial_cash=args.cash,
                 require_dq=not args.no_dq_check,
+                rebalance_days=int(getattr(args, "rebalance_days", 0) or 0),
+                research_factor=getattr(args, "research_factor", None),
+                top_n=int(getattr(args, "top_n", 20) or 20),
                 job_id=args.job_id,
             )
         )
@@ -90,6 +96,42 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     if result.message:
         print(f"message={result.message}")
     return 0 if result.status == "committed" else 2
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    from research_lab.models import FACTOR_CODES, ResearchRequest
+    from research_lab.service import ResearchService
+
+    factors = list(FACTOR_CODES) if args.factor == "ALL" else [args.factor]
+    exit_code = 0
+    for code in factors:
+        req = ResearchRequest(
+            factor_code=code,  # type: ignore[arg-type]
+            start=args.start,
+            end=args.end,
+            universe_code=args.universe,
+            factor_type=args.factor_type,
+            require_dq=not args.no_dq_check,
+            job_id=args.job_id,
+        )
+        try:
+            if args.evaluate:
+                result = ResearchService().evaluate(req)
+            else:
+                result = ResearchService().run(req)
+        except ValueError as exc:
+            print(f"status=invalid factor={code} message={exc}")
+            exit_code = 2
+            continue
+        print(
+            f"status={result.status} run_id={result.run_id} factor={result.factor_code} "
+            f"universe={result.universe_code} rows={result.row_count}"
+        )
+        if result.message:
+            print(result.message)
+        if result.status != "committed":
+            exit_code = 2
+    return exit_code
 
 
 def cmd_security_master(args: argparse.Namespace) -> int:
@@ -145,9 +187,6 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
 
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
     indexes = [s.strip() for s in (args.index or []) if s.strip()]
-    if args.scope != "CORE":
-        print("status=invalid message=当前仅支持 --scope CORE")
-        return 2
     try:
         sid, symbols = resolve_symbols_from_args(
             universe=getattr(args, "universe", None),
@@ -160,18 +199,23 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
         return 2
     if getattr(args, "universe", None):
         print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
+    req = DqRequest(
+        scope=args.scope,
+        start=args.start,
+        end=args.end,
+        symbols=symbols,
+        index_symbols=indexes,
+        factor_type=args.factor_type,
+        job_id=args.job_id,
+    )
     try:
-        result = DataQualityService().run_core(
-            DqRequest(
-                scope="CORE",
-                start=args.start,
-                end=args.end,
-                symbols=symbols,
-                index_symbols=indexes,
-                factor_type=args.factor_type,
-                job_id=args.job_id,
-            )
-        )
+        if args.scope == "CORE":
+            result = DataQualityService().run_core(req)
+        elif args.scope == "ALPHA":
+            result = DataQualityService().run_alpha(req)
+        else:
+            print(f"status=invalid message=不支持 scope={args.scope}")
+            return 2
     except ValueError as exc:
         print(f"status=invalid message={exc}")
         return 2
@@ -183,6 +227,9 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
     )
     if result.message:
         print(f"message={result.message}")
+    # ALPHA 仅报告：有告警也不阻断（exit 0）；真正异常才非 0
+    if args.scope == "ALPHA":
+        return 2 if result.message else 0
     return 0 if result.status == "passed" else 2
 
 
@@ -759,6 +806,101 @@ def cmd_alpha_news_monitor(args: argparse.Namespace) -> int:
     return 0 if result.status == "committed" else 2
 
 
+def cmd_alpha_relation(args: argparse.Namespace) -> int:
+    from data_ingest.alpha_relation.models import FetchRequest
+    from data_ingest.alpha_relation.service import RelationIngestService
+    from data_ingest.alpha_relation.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args
+
+    symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.end or args.start,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
+
+    board_names = [b.strip() for b in (getattr(args, "board_name", None) or []) if b.strip()]
+    service = RelationIngestService(source=get_source(args.source))
+    try:
+        result = service.run(
+            FetchRequest(
+                kind=args.kind,
+                start=args.start,
+                end=args.end,
+                symbols=symbols,
+                holder_type=getattr(args, "holder_type", None) or "社保",
+                board_type=getattr(args, "board_type", None) or "CONCEPT",
+                board_names=board_names,
+                max_pair_stocks=int(getattr(args, "max_pair_stocks", None) or 12),
+                job_id=args.job_id,
+            )
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    print(
+        f"status={result.status} batch_id={result.batch_id} kind={result.kind} "
+        f"fetched={result.fetched} inserted={result.inserted} updated={result.updated}"
+    )
+    if result.message:
+        print(f"message={result.message}")
+    return 0 if result.status == "committed" else 2
+
+
+def cmd_alpha_contract(args: argparse.Namespace) -> int:
+    from data_ingest.alpha_contract.models import FetchRequest
+    from data_ingest.alpha_contract.service import ContractIngestService
+    from data_ingest.alpha_contract.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args
+
+    symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.end or args.start,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
+
+    if not (args.start and args.end):
+        print("status=invalid message=需要 --start 与 --end")
+        return 2
+
+    service = ContractIngestService(source=get_source(args.source))
+    try:
+        result = service.run(
+            FetchRequest(
+                kind=args.kind,
+                start=args.start,
+                end=args.end,
+                symbols=symbols,
+                job_id=args.job_id,
+            )
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    print(
+        f"status={result.status} batch_id={result.batch_id} kind={result.kind} "
+        f"fetched={result.fetched} inserted={result.inserted} updated={result.updated}"
+    )
+    if result.message:
+        print(f"message={result.message}")
+    return 0 if result.status == "committed" else 2
+
+
 def cmd_alpha_flow(args: argparse.Namespace) -> int:
     from data_ingest.alpha_flow.models import FetchRequest
     from data_ingest.alpha_flow.service import FlowIngestService
@@ -988,7 +1130,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["eastmoney", "akshare", "cninfo", "mock"],
     )
     p_ann.add_argument("--symbol", action="append", default=[])
-    p_ann.add_argument("--category", action="append", default=[])
+    p_ann.add_argument(
+        "--category",
+        action="append",
+        default=[],
+        help=(
+            "ann_by_category 规范化类别，可重复。"
+            "中标相关: win_bid；重大合同(含中标): major_contract；"
+            "另有 share_decrease/investigation/buyback 等"
+        ),
+    )
     p_ann.add_argument("--start", help="开始日期 YYYY-MM-DD")
     p_ann.add_argument("--end", help="结束日期 YYYY-MM-DD")
     p_ann.add_argument("--page-size", type=int, default=30)
@@ -1245,6 +1396,78 @@ def build_parser() -> argparse.ArgumentParser:
     p_flow.add_argument("--job-id", default=None)
     p_flow.set_defaults(func=cmd_alpha_flow)
 
+    p_rel = sub.add_parser("alpha_relation", help="运行 ALPHA 个股关系边获取（图谱）")
+    p_rel.add_argument(
+        "--kind",
+        required=True,
+        choices=["hot_relate", "holder_team", "board_co"],
+        help="hot_relate=人气相关股；holder_team=股东协同共持；board_co=同板块",
+    )
+    p_rel.add_argument(
+        "--source", default="akshare", choices=["akshare", "eastmoney", "mock"]
+    )
+    p_rel.add_argument("--start", help="可选 YYYY-MM-DD")
+    p_rel.add_argument("--end", help="as_of 日 YYYY-MM-DD，默认今天")
+    p_rel.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
+    p_rel.add_argument(
+        "--universe",
+        choices=list(UNIVERSE_CHOICES),
+        help="hot_relate 必填之一；holder_team/board_co 用于过滤边两端",
+    )
+    p_rel.add_argument("--universe-as-of", help="Universe 点时日")
+    p_rel.add_argument(
+        "--holder-type",
+        default="社保",
+        choices=["社保", "基金", "QFII", "券商", "信托", "个人", "全部"],
+        help="holder_team：股东类型（勿用全部，分页极多）",
+    )
+    p_rel.add_argument(
+        "--board-type",
+        default="CONCEPT",
+        choices=["CONCEPT", "INDUSTRY"],
+        help="board_co：概念或行业",
+    )
+    p_rel.add_argument(
+        "--board-name",
+        action="append",
+        default=[],
+        help="board_co：板块名称，可重复",
+    )
+    p_rel.add_argument(
+        "--max-pair-stocks",
+        type=int,
+        default=12,
+        help="holder_team：单条明细最多展开多少只股做完全图",
+    )
+    p_rel.add_argument("--job-id", default=None)
+    p_rel.set_defaults(func=cmd_alpha_relation)
+
+    p_contract = sub.add_parser(
+        "alpha_contract", help="运行 ALPHA 重大合同/中标获取模块"
+    )
+    p_contract.add_argument(
+        "--kind",
+        required=True,
+        choices=["win_bid", "major_contract"],
+        help="win_bid=仅中标相关；major_contract=重大合同全量",
+    )
+    p_contract.add_argument(
+        "--source",
+        default="akshare",
+        choices=["akshare", "eastmoney", "mock"],
+    )
+    p_contract.add_argument("--start", required=True, help="YYYY-MM-DD（公告日起）")
+    p_contract.add_argument("--end", required=True, help="YYYY-MM-DD（公告日止）")
+    p_contract.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
+    p_contract.add_argument(
+        "--universe",
+        choices=list(UNIVERSE_CHOICES),
+        help="按 Universe 过滤标的（可选）",
+    )
+    p_contract.add_argument("--universe-as-of", help="Universe 点时日")
+    p_contract.add_argument("--job-id", default=None)
+    p_contract.set_defaults(func=cmd_alpha_contract)
+
     p_news = sub.add_parser("alpha_news_monitor", help="运行 ALPHA 新闻/论坛监控模块")
     p_news.add_argument(
         "--kind",
@@ -1294,7 +1517,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_news.set_defaults(func=cmd_alpha_news_monitor)
 
     p_proc = sub.add_parser("data_process", help="运行数据处理（raw → processed）")
-    p_proc.add_argument("--kind", choices=["equity_1d", "index_1d"])
+    p_proc.add_argument(
+        "--kind",
+        choices=["equity_1d", "index_1d", "fundamental_pit"],
+    )
     p_proc.add_argument(
         "--p0",
         action="store_true",
@@ -1321,7 +1547,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_proc.set_defaults(func=cmd_data_process)
 
     p_dq = sub.add_parser("data_quality", help="运行数据质量门禁（processed → dq_gate）")
-    p_dq.add_argument("--scope", default="CORE", choices=["CORE"])
+    p_dq.add_argument("--scope", default="CORE", choices=["CORE", "ALPHA"])
     p_dq.add_argument("--start", required=True, help="YYYY-MM-DD")
     p_dq.add_argument("--end", required=True, help="YYYY-MM-DD")
     p_dq.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
@@ -1385,7 +1611,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sm.set_defaults(func=cmd_security_master)
 
     p_bt = sub.add_parser("backtest", help="运行 A 股约束回测")
-    p_bt.add_argument("--strategy", default="EW_HOLD", choices=["EW_HOLD"])
+    p_bt.add_argument(
+        "--strategy",
+        default="EW_HOLD",
+        choices=["EW_HOLD", "EW_REBALANCE", "FACTOR_TOP_N"],
+    )
     p_bt.add_argument("--start", required=True, help="YYYY-MM-DD")
     p_bt.add_argument("--end", required=True, help="YYYY-MM-DD")
     p_bt.add_argument("--symbol", action="append", default=[], help="显式标的；可与 universe 二选一")
@@ -1400,12 +1630,60 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("--benchmark", default="000300")
     p_bt.add_argument("--cash", type=float, default=1_000_000.0)
     p_bt.add_argument(
+        "--rebalance-days",
+        type=int,
+        default=0,
+        help="EW_REBALANCE / FACTOR_TOP_N：每隔 N 个交易日再平衡",
+    )
+    p_bt.add_argument(
+        "--factor",
+        dest="research_factor",
+        default=None,
+        choices=["MOM_20", "VAL_PE_PCT", "FLOW_NET_5"],
+        help="FACTOR_TOP_N：使用的 research 因子代码",
+    )
+    p_bt.add_argument(
+        "--top-n",
+        type=int,
+        default=20,
+        help="FACTOR_TOP_N：每期持有因子值最高的 N 只",
+    )
+    p_bt.add_argument(
         "--no-dq-check",
         action="store_true",
         help="调试用：跳过 dq_gate（生产勿用）",
     )
     p_bt.add_argument("--job-id", default=None)
     p_bt.set_defaults(func=cmd_backtest)
+
+    p_rs = sub.add_parser("research", help="研究因子计算 / IC 分层评估")
+    p_rs.add_argument(
+        "--factor",
+        required=True,
+        choices=["MOM_20", "VAL_PE_PCT", "FLOW_NET_5", "ALL"],
+        help="基线因子；ALL=三个依次计算",
+    )
+    p_rs.add_argument("--start", required=True, help="YYYY-MM-DD")
+    p_rs.add_argument("--end", required=True, help="YYYY-MM-DD")
+    p_rs.add_argument(
+        "--universe",
+        default="TOP100",
+        choices=list(UNIVERSE_CHOICES),
+        help="Universe 快照代码",
+    )
+    p_rs.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
+    p_rs.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="对已落库因子做 RankIC / 5 分位分层（t→t+1）",
+    )
+    p_rs.add_argument(
+        "--no-dq-check",
+        action="store_true",
+        help="调试用：跳过 dq_gate（生产勿用）",
+    )
+    p_rs.add_argument("--job-id", default=None)
+    p_rs.set_defaults(func=cmd_research)
 
     return parser
 

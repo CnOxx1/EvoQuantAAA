@@ -131,6 +131,119 @@ class ProcessRepository:
                     down.add(key)
         return up, down
 
+    def load_special_treat(self, *, symbols: list[str]) -> list[dict[str, Any]]:
+        sql = """
+            SELECT symbol, treat_type, effective_date, end_date, source
+            FROM raw_special_treat
+            WHERE 1=1
+        """
+        params: list[Any] = []
+        if symbols:
+            sql += f" AND symbol IN ({_placeholders(len(symbols))})"
+            params.extend(symbols)
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def load_fund_statements(
+        self, *, symbols: list[str], preferred_source: str
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT symbol, statement_type, report_period, announce_date,
+                   item_code, item_value, source
+            FROM raw_fund_statement
+            WHERE announce_date IS NOT NULL
+        """
+        params: list[Any] = []
+        if symbols:
+            sql += f" AND symbol IN ({_placeholders(len(symbols))})"
+            params.extend(symbols)
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        return _prefer_source(
+            rows,
+            key_fields=("symbol", "statement_type", "report_period", "item_code"),
+            preferred=preferred_source,
+        )
+
+    def load_fund_indicators(
+        self, *, symbols: list[str], preferred_source: str
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT symbol, report_period, announce_date,
+                   indicator_code, indicator_value, source
+            FROM raw_fund_indicator
+            WHERE announce_date IS NOT NULL
+        """
+        params: list[Any] = []
+        if symbols:
+            sql += f" AND symbol IN ({_placeholders(len(symbols))})"
+            params.extend(symbols)
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        return _prefer_source(
+            rows,
+            key_fields=("symbol", "report_period", "indicator_code"),
+            preferred=preferred_source,
+        )
+
+    def upsert_fund_snapshot_rows(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[int, int]:
+        if not rows:
+            return 0, 0
+        sql = """
+            INSERT INTO processed_fund_snapshot (
+                process_batch_id, symbol, report_period, publish_date,
+                valid_from, valid_to,
+                revenue, net_profit, total_assets, total_liabilities,
+                roe, eps, metrics_json, source, processed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(symbol, valid_from) DO UPDATE SET
+                process_batch_id=excluded.process_batch_id,
+                report_period=excluded.report_period,
+                publish_date=excluded.publish_date,
+                valid_to=excluded.valid_to,
+                revenue=excluded.revenue,
+                net_profit=excluded.net_profit,
+                total_assets=excluded.total_assets,
+                total_liabilities=excluded.total_liabilities,
+                roe=excluded.roe,
+                eps=excluded.eps,
+                metrics_json=excluded.metrics_json,
+                source=excluded.source,
+                processed_at=excluded.processed_at
+        """
+        params = [
+            (
+                r["process_batch_id"],
+                r["symbol"],
+                r["report_period"],
+                r["publish_date"],
+                r["valid_from"],
+                r.get("valid_to"),
+                r.get("revenue"),
+                r.get("net_profit"),
+                r.get("total_assets"),
+                r.get("total_liabilities"),
+                r.get("roe"),
+                r.get("eps"),
+                r.get("metrics_json"),
+                r["source"],
+                r["processed_at"],
+            )
+            for r in rows
+        ]
+        with get_conn() as conn:
+            symbols = sorted({str(r["symbol"]) for r in rows})
+            if symbols:
+                conn.execute(
+                    f"DELETE FROM processed_fund_snapshot WHERE symbol IN ({_placeholders(len(symbols))})",
+                    tuple(symbols),
+                )
+            for i in range(0, len(params), 500):
+                conn.executemany(sql, params[i : i + 500])
+        return len(rows), 0
+
     def load_index_bars(
         self,
         *,

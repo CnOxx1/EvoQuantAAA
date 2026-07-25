@@ -74,16 +74,21 @@
 | ingest_announcement_watermark | oltp | data_ingest/alpha_announcement | alpha_announcement, ops_monitor | (source, channel, watch_key?) | 公告增量/订阅水位线 |
 | raw_news_media | market_data | data_ingest/alpha_news_monitor | data_process, research_lab, ops_monitor | 源 ID/哈希 + batch_id | ALPHA；与公告分表；channel=official/forum/policy；`content_type`（含 policy/policy_index）与 `extra_json`（情绪分、`policy_tags`/`tone_hint`/EPU） |
 | ingest_news_watermark | oltp | data_ingest/alpha_news_monitor | alpha_news_monitor, ops_monitor | (source, channel) | 新闻监控水位线 |
+| raw_major_contract | market_data | data_ingest/alpha_contract | research_lab, data_process | (symbol, announce_date, source_event_id, source) | ALPHA；重大合同/中标；点时=`announce_date`；`is_win_bid` 标中标类 |
+| raw_stock_relation | market_data | data_ingest/alpha_relation | research_lab, api_gateway/frontend | (src, dst, relation_type, as_of_date, source_event_id, source) | ALPHA；个股关系边；`HOT_RELATE`/`HOLDER_TEAM`/`CONCEPT_CO`/`INDUSTRY_CO` |
 | raw_*（统称） | market_data | data_ingest | data_process | batch_id | 提交后可见 |
 | process_batch | oltp | data_process | data_quality, ops_monitor | process_batch_id | created→committed/failed |
-| processed_equity_bar_1d | market_data | data_process (equity_1d) | data_quality, research_lab, backtest | (symbol, trade_date, factor_type) | 复权价/ret_1d/can_buy|sell |
+| processed_equity_bar_1d | market_data | data_process (equity_1d) | data_quality, research_lab, backtest | (symbol, trade_date, factor_type) | 复权价/ret_1d/can_buy|sell；缺板时 limit_derived |
 | processed_index_bar_1d | market_data | data_process (index_1d) | data_quality, research_lab, backtest | (index_symbol, trade_date) | 指数收益 |
+| processed_fund_snapshot | market_data | data_process (fundamental_pit) | research_lab | (symbol, valid_from) | 基本面 PIT 区间；`publish_date`=`announce_date`；`valid_to` 可空 |
 | processed_*（统称） | market_data | data_process | data_quality, research_lab, backtest | process_batch_id | 提交后可见 |
 | dq_run | oltp | data_quality | ops_monitor, orchestrator | dq_run_id | created→passed/failed |
 | dq_result | oltp | data_quality | orchestrator, research_lab, signal_prod, ops_monitor | (dq_run_id, rule_code) | 单规则 pass/fail |
 | dq_gate | oltp | data_quality | research_lab, backtest, signal_prod, orchestrator | (scope, start, end, factor_type) | 区间最新闸门 |
 | universe_snapshot | ref_data | security_master | research_lab, signal_prod, portfolio_construct, backtest | (as_of_date, universe_code) / universe_snapshot_id | 日快照头；committed 后可见 |
 | universe_snapshot_member | ref_data | security_master | research_lab, signal_prod, portfolio_construct, backtest | (universe_snapshot_id, symbol) | 快照成员（含 ST/行业/权重） |
+| research_run | oltp | research_lab | strategy_registry, ops_monitor | run_id | 计算/评估元数据；`meta_json` 含 IC 报告 |
+| research_factor_value | oltp | research_lab | backtest, strategy_registry | (factor_code, symbol, trade_date, universe_code) | 基线因子值；点时=trade_date；幂等 UPSERT |
 | research_* | oltp | research_lab | strategy_registry, backtest | run_id | 非 live |
 | strategy_version | oltp | strategy_registry | signal_prod, backtest | strategy_version | 状态机 |
 | signal_prod_* | oltp | signal_prod | portfolio_construct, backtest | signal_batch_id | 仅已晋升版本 |

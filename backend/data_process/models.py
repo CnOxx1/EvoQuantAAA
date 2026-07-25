@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-ProcessKind = Literal["equity_1d", "index_1d"]
+ProcessKind = Literal["equity_1d", "index_1d", "fundamental_pit"]
 
 P0_KINDS: tuple[ProcessKind, ...] = ("equity_1d", "index_1d")
 

@@ -4,7 +4,9 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from backtest.engine import run_ew_hold
+from datetime import date, timedelta
+
+from backtest.engine import run_ew_hold, run_ew_rebalance, run_factor_top_n
 from backtest.models import BacktestRequest, BacktestResult
 from backtest.repository import BacktestRepository
 
@@ -103,20 +105,73 @@ class BacktestService:
                 "meta": {
                     "requested_symbols": symbols,
                     "available_symbols": available,
+                    "research_factor": request.research_factor,
+                    "top_n": request.top_n,
+                    "rebalance_days": request.rebalance_days,
                 },
                 "created_at": created,
             }
         )
 
         try:
-            if request.strategy_code != "EW_HOLD":
+            if request.strategy_code == "EW_HOLD":
+                out = run_ew_hold(
+                    bars=bars,
+                    index_bars=index_bars,
+                    cost=cost,
+                    initial_cash=request.initial_cash,
+                )
+            elif request.strategy_code == "EW_REBALANCE":
+                rb = int(request.rebalance_days or 0)
+                if rb <= 0:
+                    raise ValueError("EW_REBALANCE 需要 --rebalance-days > 0")
+                out = run_ew_rebalance(
+                    bars=bars,
+                    index_bars=index_bars,
+                    cost=cost,
+                    initial_cash=request.initial_cash,
+                    rebalance_days=rb,
+                )
+            elif request.strategy_code == "FACTOR_TOP_N":
+                if not request.research_factor:
+                    raise ValueError("FACTOR_TOP_N 需要 --factor")
+                if not request.universe_code:
+                    raise ValueError("FACTOR_TOP_N 需要 --universe（与因子落库一致）")
+                rb = int(request.rebalance_days or 0)
+                if rb <= 0:
+                    raise ValueError("FACTOR_TOP_N 需要 --rebalance-days > 0")
+                top_n = int(request.top_n or 0)
+                if top_n <= 0:
+                    raise ValueError("FACTOR_TOP_N 需要 --top-n > 0")
+                # 多取数日因子，供首个调仓日用「前一日」值
+                factor_start = (
+                    date.fromisoformat(start) - timedelta(days=40)
+                ).isoformat()
+                factor_rows = self.repo.load_research_factor_values(
+                    factor_code=request.research_factor,
+                    universe_code=request.universe_code,
+                    start=factor_start,
+                    end=end,
+                    symbols=available,
+                )
+                if not factor_rows:
+                    raise RuntimeError(
+                        f"无因子 {request.research_factor}/{request.universe_code}，"
+                        f"请先: python main.py research --factor "
+                        f"{request.research_factor} --universe {request.universe_code} "
+                        f"--start {start} --end {end}"
+                    )
+                out = run_factor_top_n(
+                    bars=bars,
+                    index_bars=index_bars,
+                    cost=cost,
+                    initial_cash=request.initial_cash,
+                    factor_rows=factor_rows,
+                    top_n=top_n,
+                    rebalance_days=rb,
+                )
+            else:
                 raise ValueError(f"不支持的策略: {request.strategy_code}")
-            out = run_ew_hold(
-                bars=bars,
-                index_bars=index_bars,
-                cost=cost,
-                initial_cash=request.initial_cash,
-            )
             self.repo.write_nav(run_id, out.nav_rows)
             self.repo.write_trades(run_id, out.trades)
             meta = {
@@ -124,6 +179,9 @@ class BacktestService:
                 "available_symbols": available,
                 "symbols_used": out.symbols_used,
                 "coverage": f"{len(out.symbols_used)}/{len(symbols)}",
+                "research_factor": request.research_factor,
+                "top_n": request.top_n,
+                "rebalance_days": request.rebalance_days,
             }
             self.repo.finish_run(
                 run_id=run_id,

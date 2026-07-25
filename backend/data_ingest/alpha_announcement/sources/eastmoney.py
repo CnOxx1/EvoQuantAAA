@@ -4,7 +4,10 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from data_ingest.alpha_announcement.category import normalize_category
+from data_ingest.alpha_announcement.category import (
+    matches_requested_categories,
+    normalize_category,
+)
 from data_ingest.alpha_announcement.models import AnnouncementRecord, FetchRequest
 from data_ingest.alpha_announcement.sources.base import AnnouncementSource, FetchResult
 from data_ingest.alpha_announcement.timeutil import normalize_publish_time
@@ -83,8 +86,11 @@ class EastmoneyAnnouncementSource(AnnouncementSource):
             records = [
                 r
                 for r in records
-                if r.category_norm in request.categories
-                or r.category_raw in request.categories
+                if matches_requested_categories(
+                    category_norm=r.category_norm,
+                    category_raw=r.category_raw,
+                    requested=request.categories,
+                )
             ]
 
         max_pt = None

@@ -4,6 +4,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from data_quality.alpha_rules import run_alpha_rules
 from data_quality.models import DqRequest, DqRunResult
 from data_quality.repository import DqRepository
 from data_quality.rules import run_core_rules
@@ -54,12 +55,16 @@ class DataQualityService:
                 start=start, end=end, index_symbols=indexes
             )
             calendar = self.repo.load_open_calendar_dates(start=start, end=end)
+            corp_actions = self.repo.load_corp_actions(
+                start=start, end=end, symbols=request.symbols
+            )
             outcomes = run_core_rules(
                 equity_rows=equity,
                 index_rows=index_rows,
                 calendar_open_dates=calendar or None,
                 expected_symbols=request.symbols,
                 expected_indexes=indexes,
+                corp_actions=corp_actions,
             )
             checked_at = _utcnow()
             self.repo.write_results(
@@ -133,6 +138,96 @@ class DataQualityService:
             return DqRunResult(
                 dq_run_id=dq_run_id,
                 scope="CORE",
+                status="failed",
+                start=start,
+                end=end,
+                factor_type=request.factor_type,
+                message=str(exc),
+            )
+
+    def run_alpha(self, request: DqRequest) -> DqRunResult:
+        """ALPHA 轻量规则：只出报告，不写 dq_gate。"""
+        if not (request.start and request.end):
+            raise ValueError("ALPHA DQ 需要 --start 与 --end")
+        start, end = request.start[:10], request.end[:10]
+        dq_run_id = f"dq_{uuid.uuid4().hex}"
+        now = _utcnow()
+        self.repo.create_run(
+            dq_run_id=dq_run_id,
+            scope="ALPHA",
+            start=start,
+            end=end,
+            factor_type=request.factor_type,
+            job_id=request.job_id,
+            meta={"symbols": request.symbols},
+            created_at=now,
+        )
+        try:
+            valuations = self.repo.load_valuations(
+                start=start, end=end, symbols=request.symbols
+            )
+            flows = self.repo.load_money_flow(start=start, end=end)
+            news = self.repo.load_news(start=start, end=end)
+            outcomes = run_alpha_rules(
+                valuation_rows=valuations,
+                money_flow_rows=flows,
+                news_rows=news,
+            )
+            checked_at = _utcnow()
+            self.repo.write_results(
+                dq_run_id=dq_run_id, outcomes=outcomes, checked_at=checked_at
+            )
+            warn_fails = sum(
+                1 for o in outcomes if o.severity == "warn" and o.status == "fail"
+            )
+            # ALPHA 不阻断：status 反映是否有告警，但不写 gate
+            status = "passed" if warn_fails == 0 else "failed"
+            summary = {
+                "warn_fails": warn_fails,
+                "gate_written": False,
+                "rules": [
+                    {
+                        "rule_code": o.rule_code,
+                        "severity": o.severity,
+                        "status": o.status,
+                        "message": o.message,
+                    }
+                    for o in outcomes
+                ],
+            }
+            self.repo.finish_run(
+                dq_run_id=dq_run_id,
+                status=status,
+                summary=summary,
+                finished_at=_utcnow(),
+            )
+            logger.info(
+                "data_quality ALPHA %s run=%s warns=%s (no gate)",
+                status,
+                dq_run_id,
+                warn_fails,
+            )
+            return DqRunResult(
+                dq_run_id=dq_run_id,
+                scope="ALPHA",
+                status=status,
+                start=start,
+                end=end,
+                factor_type=request.factor_type,
+                warn_fails=warn_fails,
+                rule_count=len(outcomes),
+            )
+        except Exception as exc:
+            logger.exception("data_quality ALPHA failed")
+            self.repo.finish_run(
+                dq_run_id=dq_run_id,
+                status="failed",
+                summary={"error": str(exc)},
+                finished_at=_utcnow(),
+            )
+            return DqRunResult(
+                dq_run_id=dq_run_id,
+                scope="ALPHA",
                 status="failed",
                 start=start,
                 end=end,

@@ -97,8 +97,19 @@
 | `investigation` / `penalty` / `inquiry` | 风险剔除 |
 | `restructure` / `halt_related` | 重大资产/停复牌相关 |
 | `dividend_plan` | 与 `core_market/corp_action` 交叉校验 |
+| `win_bid` | **中标/中选**披露（标题或类型含中标等） |
+| `major_contract` | 重大合同披露；过滤时**包含** `win_bid` |
 
 不为每个类别新建子模块；用配置 + `category_raw`/`category_norm` 过滤。
+
+### 与 `alpha_contract` 双源交叉
+
+| 源 | 表 | 角色 |
+| --- | --- | --- |
+| `alpha_contract` | `raw_major_contract` | 结构化金额/对手方（东财重大合同明细） |
+| 本模块 `ann_by_category` | `raw_announcement` | 法定披露标题与链接（点时=`publish_time`） |
+
+研究侧建议：以 `announce_date`/`publish_time` 对齐同一标的，公告补漏、合同表供金额特征。
 
 ## 运行
 
@@ -111,7 +122,11 @@ python main.py alpha_announcement --kind ann_incremental
 python main.py alpha_announcement --kind ann_watchlist --symbol 600000
 python main.py alpha_announcement --kind ann_backfill --symbol 600000 --start 2026-07-01 --end 2026-07-23
 python main.py alpha_announcement --kind ann_by_category --category share_decrease --start 2026-07-23 --end 2026-07-23
-# 备选巨潮 / 离线夹具
+# 中标 / 重大合同披露（与 alpha_contract 交叉验证）
+python main.py alpha_announcement --kind ann_by_category --category win_bid --start 2026-07-24 --end 2026-07-24
+python main.py alpha_announcement --kind ann_by_category --category major_contract --start 2026-07-24 --end 2026-07-24
+# 备选巨潮（中标类会带 searchkey=中标）/ 离线夹具
+python main.py alpha_announcement --kind ann_by_category --source cninfo --category win_bid --start 2026-07-20 --end 2026-07-25
 python main.py alpha_announcement --kind ann_watchlist --source cninfo --symbol 600000
 python main.py alpha_announcement --kind ann_incremental --source mock
 ```

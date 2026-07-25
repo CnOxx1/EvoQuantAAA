@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 from data_process.batch import ProcessBatchManager
 from data_process.compute import build_equity_processed_rows, build_index_processed_rows
+from data_process.fund_pit import build_fund_pit_intervals
+from data_process.limit_derive import derive_limit_keys
 from data_process.models import P0_KINDS, ProcessRequest, ProcessResult
 from data_process.repository import ProcessRepository
 
@@ -30,6 +32,8 @@ class DataProcessService:
             return self._run_equity(request)
         if request.kind == "index_1d":
             return self._run_index(request)
+        if request.kind == "fundamental_pit":
+            return self._run_fundamental_pit(request)
         raise ValueError(f"unsupported process kind: {request.kind}")
 
     def run_p0(self, request_base: ProcessRequest) -> list[ProcessResult]:
@@ -84,6 +88,13 @@ class DataProcessService:
             limit_up, limit_down = self.repo.load_limit_keys(
                 start=request.start, end=request.end, symbols=symbols
             )
+            st_rows = self.repo.load_special_treat(symbols=symbols)
+            limit_up, limit_down, derived = derive_limit_keys(
+                bars=bars,
+                st_rows=st_rows,
+                existing_up=limit_up,
+                existing_down=limit_down,
+            )
             rows, skipped = build_equity_processed_rows(
                 bars=bars,
                 factors=factors,
@@ -94,19 +105,31 @@ class DataProcessService:
                 process_batch_id=info.process_batch_id,
                 processed_at=_utcnow(),
             )
+            if derived:
+                dkeys = derived
+                for row in rows:
+                    key = (str(row["symbol"]), str(row["trade_date"])[:10])
+                    if key in dkeys:
+                        src = str(row.get("source") or "")
+                        if "limit_derived" not in src:
+                            row["source"] = f"{src}|limit_derived" if src else "limit_derived"
             if not rows:
                 raise RuntimeError(
                     f"加工结果为空：输入 {len(bars)} 行，缺因子跳过 {skipped}"
                 )
             inserted, updated = self.repo.upsert_equity_rows(rows)
             self.batches.commit(info.process_batch_id)
-            msg = ""
+            msg_parts = []
             if skipped:
-                msg = f"skipped_no_factor={skipped}"
+                msg_parts.append(f"skipped_no_factor={skipped}")
+            if derived:
+                msg_parts.append(f"limit_derived={len(derived)}")
+            msg = ";".join(msg_parts)
             logger.info(
-                "data_process committed kind=equity_1d batch=%s out=%s",
+                "data_process committed kind=equity_1d batch=%s out=%s derived=%s",
                 info.process_batch_id,
                 len(rows),
+                len(derived),
             )
             return ProcessResult(
                 kind="equity_1d",
@@ -176,6 +199,60 @@ class DataProcessService:
             self.batches.fail(info.process_batch_id, str(exc))
             return ProcessResult(
                 kind="index_1d",
+                status="failed",
+                process_batch_id=info.process_batch_id,
+                message=str(exc),
+            )
+
+    def _run_fundamental_pit(self, request: ProcessRequest) -> ProcessResult:
+        info = self.batches.create(
+            process_kind="fundamental_pit",
+            job_id=request.job_id,
+            meta={
+                "symbols": request.symbols,
+                "preferred_source": request.preferred_source,
+            },
+        )
+        try:
+            stmts = self.repo.load_fund_statements(
+                symbols=request.symbols,
+                preferred_source=request.preferred_source,
+            )
+            inds = self.repo.load_fund_indicators(
+                symbols=request.symbols,
+                preferred_source=request.preferred_source,
+            )
+            if not stmts and not inds:
+                raise RuntimeError("无 raw_fund_statement / raw_fund_indicator 输入")
+            rows = build_fund_pit_intervals(
+                statement_rows=stmts,
+                indicator_rows=inds,
+                process_batch_id=info.process_batch_id,
+                processed_at=_utcnow(),
+            )
+            if not rows:
+                raise RuntimeError("PIT 区间为空（检查 announce_date）")
+            inserted, updated = self.repo.upsert_fund_snapshot_rows(rows)
+            self.batches.commit(info.process_batch_id)
+            logger.info(
+                "data_process committed kind=fundamental_pit batch=%s out=%s",
+                info.process_batch_id,
+                len(rows),
+            )
+            return ProcessResult(
+                kind="fundamental_pit",
+                status="committed",
+                process_batch_id=info.process_batch_id,
+                input_rows=len(stmts) + len(inds),
+                output_rows=len(rows),
+                inserted=inserted,
+                updated=updated,
+            )
+        except Exception as exc:
+            logger.exception("data_process fundamental_pit failed")
+            self.batches.fail(info.process_batch_id, str(exc))
+            return ProcessResult(
+                kind="fundamental_pit",
                 status="failed",
                 process_batch_id=info.process_batch_id,
                 message=str(exc),

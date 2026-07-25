@@ -1,4 +1,5 @@
 data/
+data/pgdata/
 __pycache__/
 *.py[cod]
 .venv/

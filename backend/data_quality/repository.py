@@ -86,6 +86,78 @@ class DqRepository:
             rows = conn.execute(sql, tuple(params)).fetchall()
         return {str(r["trade_date"])[:10] for r in rows}
 
+    def load_corp_actions(
+        self,
+        *,
+        start: str | None,
+        end: str | None,
+        symbols: list[str],
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT symbol, ex_date, action_type, raw_payload, source
+            FROM raw_corp_action
+            WHERE 1=1
+        """
+        params: list[Any] = []
+        if start:
+            sql += " AND ex_date >= ?"
+            params.append(start[:10])
+        if end:
+            sql += " AND ex_date <= ?"
+            params.append(end[:10])
+        if symbols:
+            sql += f" AND symbol IN ({_ph(len(symbols))})"
+            params.extend(symbols)
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def load_valuations(
+        self, *, start: str, end: str, symbols: list[str]
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT symbol, trade_date, pe_ttm, pb, source
+            FROM raw_valuation_1d
+            WHERE trade_date>=? AND trade_date<=?
+        """
+        params: list[Any] = [start, end]
+        if symbols:
+            sql += f" AND symbol IN ({_ph(len(symbols))})"
+            params.extend(symbols)
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def load_money_flow(
+        self, *, start: str, end: str
+    ) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            return [
+                dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT scope, trade_date, flow_type, net_amount, source
+                    FROM raw_money_flow
+                    WHERE trade_date>=? AND trade_date<=?
+                    """,
+                    (start, end),
+                ).fetchall()
+            ]
+
+    def load_news(
+        self, *, start: str, end: str
+    ) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            return [
+                dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT id, title, publish_time, ingested_at, source
+                    FROM raw_news_media
+                    WHERE publish_time>=? AND publish_time<=?
+                    """,
+                    (start, end + "T23:59:59"),
+                ).fetchall()
+            ]
+
     def create_run(
         self,
         *,

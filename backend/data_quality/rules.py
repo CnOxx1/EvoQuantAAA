@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from data_quality.corp_action_check import corp_action_adj_check
 from data_quality.models import RuleOutcome
 
 
@@ -13,6 +14,7 @@ def run_core_rules(
     calendar_open_dates: set[str] | None,
     expected_symbols: list[str],
     expected_indexes: list[str],
+    corp_actions: list[dict[str, Any]] | None = None,
 ) -> list[RuleOutcome]:
     outcomes: list[RuleOutcome] = []
     outcomes.append(_equity_nonempty(equity_rows, expected_symbols))
@@ -24,6 +26,12 @@ def run_core_rules(
     outcomes.append(_ohlc_order(equity_rows))
     outcomes.append(_extreme_return(equity_rows))
     outcomes.append(_calendar_align(equity_rows, calendar_open_dates))
+    outcomes.append(
+        corp_action_adj_check(
+            corp_actions=corp_actions or [],
+            equity_rows=equity_rows,
+        )
+    )
     return outcomes
 
 

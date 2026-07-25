@@ -5,7 +5,11 @@ from typing import Any
 
 import requests
 
-from data_ingest.alpha_announcement.category import normalize_category
+from data_ingest.alpha_announcement.category import (
+    cninfo_searchkey,
+    matches_requested_categories,
+    normalize_category,
+)
 from data_ingest.alpha_announcement.models import AnnouncementRecord, FetchRequest
 from data_ingest.alpha_announcement.sources.base import AnnouncementSource, FetchResult
 from data_ingest.alpha_announcement.timeutil import default_se_date, normalize_publish_time
@@ -81,12 +85,12 @@ class CninfoAnnouncementSource(AnnouncementSource):
                     rec = self._map_item(item)
                     if since_n and rec.publish_time <= since_n:
                         continue
-                    if request.categories:
-                        if (
-                            rec.category_norm not in request.categories
-                            and rec.category_raw not in request.categories
-                        ):
-                            continue
+                    if request.categories and not matches_requested_categories(
+                        category_norm=rec.category_norm,
+                        category_raw=rec.category_raw,
+                        requested=request.categories,
+                    ):
+                        continue
                     records.append(rec)
                     if max_pt is None or rec.publish_time > max_pt:
                         max_pt = rec.publish_time
@@ -116,7 +120,7 @@ class CninfoAnnouncementSource(AnnouncementSource):
             "tabName": "fulltext",
             "plate": "",
             "stock": stock,
-            "searchkey": "",
+            "searchkey": cninfo_searchkey(request.categories),
             "secid": "",
             "category": "",
             "trade": "",

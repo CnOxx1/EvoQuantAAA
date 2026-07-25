@@ -120,6 +120,40 @@ class BacktestRepository:
                 ).fetchall()
             ]
 
+    def load_research_factor_values(
+        self,
+        *,
+        factor_code: str,
+        universe_code: str,
+        start: str,
+        end: str,
+        symbols: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """只读 research_factor_value（经库；不 import research_lab）。"""
+        if symbols is not None and not symbols:
+            return []
+        if symbols:
+            sql = f"""
+                SELECT symbol, trade_date, value
+                FROM research_factor_value
+                WHERE factor_code=? AND universe_code=?
+                  AND trade_date>=? AND trade_date<=?
+                  AND symbol IN ({_ph(len(symbols))})
+                ORDER BY trade_date, symbol
+            """
+            params: list[Any] = [factor_code, universe_code, start, end, *symbols]
+        else:
+            sql = """
+                SELECT symbol, trade_date, value
+                FROM research_factor_value
+                WHERE factor_code=? AND universe_code=?
+                  AND trade_date>=? AND trade_date<=?
+                ORDER BY trade_date, symbol
+            """
+            params = [factor_code, universe_code, start, end]
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
     def create_run(self, row: dict[str, Any]) -> None:
         with get_conn() as conn:
             conn.execute(

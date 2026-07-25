@@ -12,16 +12,28 @@
 | 日净值 | `backtest_nav` | 每日 cash/市值/基准 |
 | 成交假设 | `backtest_trade` | 建仓/调仓成交 |
 
-## 策略（P0）
+## 策略
 
 | strategy_code | 行为 |
 | --- | --- |
-| `EW_HOLD` | 首个可买日等权建仓并持有；整手 100；佣金/印花税/滑点读 cost |
+| `EW_HOLD` | 首个可买日等权建仓并持有（未成交目标顺延至对齐） |
+| `EW_REBALANCE` | 等权 + `--rebalance-days N` 定期再平衡 |
+| `FACTOR_TOP_N` | 读 `research_factor_value`；调仓日用**前一交易日**因子 top N 等权 |
+
+底层通用撮合：`engine.run_target_weights`（目标权重 → 先卖后买）。
+
+## A 股约束（引擎强制）
+
+- **T+1**：`buy_date < 当日` 才可卖
+- **can_buy / can_sell**：涨停不可买、跌停/停牌不可卖；受阻订单顺延
+- **整手**：`lot_size`（默认 100）向下取整
+- **费用**：买入佣金；卖出佣金 + **印花税**（`stamp_tax_rate`，仅卖出）；滑点计入成交价
+- 现金不足按比例缩量买入，不允许透支
 
 ## 约束
 - 默认要求 `dq_gate(CORE, start, end, factor_type)=passed`
 - 只交易有 `processed_equity_bar_1d` 的标的（Universe 其余跳过并记 coverage）
-- `can_buy=0` 不得买入；费用与 `execution` 共用 `cost_params` 版本
+- 费用与 `execution` 共用 `cost_params` 版本
 
 ## 边界
 - 做：模拟成交、写报告；绑定 Universe/DQ/cost 版本。
@@ -33,10 +45,14 @@
 cd backend
 python main.py migrate
 python main.py backtest --strategy EW_HOLD --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
-python main.py backtest --strategy EW_HOLD --start 2026-07-01 --end 2026-07-23 --universe HS300
+python main.py backtest --strategy EW_REBALANCE --rebalance-days 20 --universe TOP100 --start 2026-06-01 --end 2026-07-23 --factor-type qfq
+# 因子 → 回测（须先 research 落库）
+python main.py research --factor MOM_20 --universe TOP100 --start 2026-06-01 --end 2026-07-23
+python main.py backtest --strategy FACTOR_TOP_N --factor MOM_20 --top-n 20 --rebalance-days 20 --universe TOP100 --start 2026-06-01 --end 2026-07-23
 python -m backtest.selfcheck
+python -m pytest tests/test_backtest_engine.py -q
 ```
 
 ## 不变量
-- T+1 / 涨跌停 / 停牌 / 整手 / 费用默认开启（P0 持有策略主要体现买入约束与费用）
+- T+1 / 涨跌停 / 停牌 / 整手 / 印花税（卖）默认开启
 - 未过 DQ 不得宣称区间可回测（除非显式 `--no-dq-check` 调试）
