@@ -48,7 +48,7 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 │   ├── shared/                  # DB / 配置 / Universe 解析等
 │   └── …（orchestrator、research_lab、risk_engine 等骨架）
 ├── database/
-│   ├── migrations/              # 001–013 SQL（权威演进）
+│   ├── migrations/              # 001–014 SQL（权威演进）
 │   ├── schema/                  # 产消契约说明
 │   └── seeds/
 └── scripts/                     # 辅助脚本
@@ -79,14 +79,14 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 
 | 阶段 | 模块 | 状态摘要 |
 | --- | --- | --- |
-| 契约 | `database/migrations` 001–013 | 已应用 |
-| CORE 参考 | `core_ref` | 日历/上市/行业/股本/成分/ST |
-| CORE 行情 | `core_market` | 日线、复权、停牌、涨跌停池、指数、公司行为、市场排名、盘口异动；TOP100 长窗样本已 DQ pass |
+| 契约 | `database/migrations` 001–014 | 已应用 |
+| CORE 参考 | `core_ref` | 日历/上市/行业/股本/成分/ST/解禁 |
+| CORE 行情 | `core_market` | 日线、复权、停牌、涨跌停、指数、公司行为、市场排名、盘口异动、板块日线；TOP100 长窗样本已 DQ pass |
 | 加工 | `data_process` | 复权价、`ret_1d`、`can_buy`/`can_sell` |
 | 门禁 | `data_quality` | CORE 规则 + `dq_gate` |
 | Universe | `security_master` | 默认 `TOP100` / `SECTOR_LEADERS`（全市场仅按需） |
 | 回测 | `backtest` | `EW_HOLD` + 成本参数 + NAV/成交 |
-| ALPHA | announcement / fundamental / flow / news | 真实源可入库（覆盖按需扩） |
+| ALPHA | announcement / fundamental / flow / news | 财报估值股东、资金两融龙虎榜、公告、新闻快讯/论坛情绪/政策语境（`news_policy`） |
 
 ### 3.2 骨架/待建
 
@@ -175,6 +175,14 @@ python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
 
 > 维护约定：有可合并的功能/数据里程碑时，在本节**顶部**追加一条（新→旧）。  
 > 格式：日期 · 标题 · 要点列表 ·（可选）影响范围。
+
+### 2026-07-25 · 新闻官方快讯 + 论坛情绪 + 政策语境
+
+- `alpha_news_monitor` 新增 kind：`news_official`（通讯社 + 财经早餐/财新）、`news_forum`（千股千评/雪球/微博 + 可选百度热搜·投票·千股千评明细）、`news_policy`（政策语境：早餐/财新/EPU + 可选 CCTV/经济日历/财联社政策过滤，带 `policy_tags`/`tone_hint`）
+- 迁移 `014_news_sentiment.sql`：`raw_news_media.content_type` / `extra_json`
+- CLI：`--media` 子源过滤、`--forum-top-n`、可选 `--universe`
+- 法定公告仍在 `alpha_announcement`；本模块服务舆情/情绪/利好利空原料，不阻塞 CORE
+- 文档：`backend/data_ingest/README.md`、`alpha_news_monitor/README.md`、`database/schema|migrations/README.md` 已同步
 
 ### 2026-07-25 · ingest 工程优化 + 四个增强 kind
 

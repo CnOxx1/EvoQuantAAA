@@ -715,8 +715,21 @@ def cmd_alpha_news_monitor(args: argparse.Namespace) -> int:
     from data_ingest.alpha_news_monitor.models import FetchRequest
     from data_ingest.alpha_news_monitor.service import NewsIngestService
     from data_ingest.alpha_news_monitor.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args
 
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.end or args.start,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
     source = get_source(args.source)
     service = NewsIngestService(
         source=source,
@@ -728,6 +741,8 @@ def cmd_alpha_news_monitor(args: argparse.Namespace) -> int:
         end=args.end,
         symbols=symbols,
         job_id=args.job_id,
+        media_filters=[m.strip() for m in (getattr(args, "media", None) or []) if m.strip()],
+        forum_top_n=int(getattr(args, "forum_top_n", None) or 200),
     )
     try:
         result = service.run(request)
@@ -1230,11 +1245,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_flow.add_argument("--job-id", default=None)
     p_flow.set_defaults(func=cmd_alpha_flow)
 
-    p_news = sub.add_parser("alpha_news_monitor", help="运行 ALPHA 新闻监控模块")
+    p_news = sub.add_parser("alpha_news_monitor", help="运行 ALPHA 新闻/论坛监控模块")
     p_news.add_argument(
         "--kind",
         required=True,
-        choices=["news_incremental", "news_watchlist", "news_backfill"],
+        choices=[
+            "news_incremental",
+            "news_watchlist",
+            "news_backfill",
+            "news_official",
+            "news_forum",
+            "news_policy",
+        ],
     )
     p_news.add_argument(
         "--source",
@@ -1242,8 +1264,31 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["akshare", "eastmoney", "mock"],
     )
     p_news.add_argument("--symbol", action="append", default=[])
+    p_news.add_argument(
+        "--universe",
+        choices=list(UNIVERSE_CHOICES),
+        help="news_forum/watchlist/policy：从 Universe 过滤标的",
+    )
+    p_news.add_argument("--universe-as-of", help="Universe 点时日")
     p_news.add_argument("--start", help="YYYY-MM-DD")
     p_news.add_argument("--end", help="YYYY-MM-DD")
+    p_news.add_argument(
+        "--media",
+        action="append",
+        default=[],
+        help=(
+            "子源过滤。官方: cls/sina/futu/ths/cctv/cjzc/caixin；"
+            "论坛默认 em_comment/xueqiu/weibo，扩展 em_detail/xueqiu_follow/"
+            "xueqiu_deal/baidu_hot/baidu_vote；"
+            "政策默认 cjzc/caixin/epu，扩展 cctv/econ/cls_policy"
+        ),
+    )
+    p_news.add_argument(
+        "--forum-top-n",
+        type=int,
+        default=200,
+        help="news_forum/policy：无 --symbol 时截断条数（默认 200，开发机友好）",
+    )
     p_news.add_argument("--job-id", default=None)
     p_news.add_argument("--no-fallback", action="store_true")
     p_news.set_defaults(func=cmd_alpha_news_monitor)

@@ -13,7 +13,15 @@ from data_ingest.ingest_common.batch import BatchManager
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "alpha_news_monitor"
-_WATERMARK_KINDS = frozenset({"news_incremental", "news_watchlist"})
+_WATERMARK_KINDS = frozenset(
+    {
+        "news_incremental",
+        "news_watchlist",
+        "news_official",
+        "news_forum",
+        "news_policy",
+    }
+)
 
 
 @dataclass
@@ -47,9 +55,15 @@ class NewsIngestService:
 
         active = self.source
         watch_key = self._watch_key(request)
+        # channel 在 fetch 前按 kind 预设，便于水位读写
+        channel = {
+            "news_official": "official",
+            "news_forum": "forum",
+            "news_policy": "policy",
+        }.get(request.kind, getattr(active, "channel", "eastmoney"))
         since = None
         if request.kind in _WATERMARK_KINDS:
-            since = self.repo.get_watermark(active.source, active.channel, watch_key)
+            since = self.repo.get_watermark(active.source, channel, watch_key)
 
         batch = self.batches.create(
             ingest_module=MODULE_NAME,
@@ -58,9 +72,11 @@ class NewsIngestService:
             job_id=request.job_id,
             meta={
                 "source": active.source,
-                "channel": active.channel,
+                "channel": channel,
                 "watch_key": watch_key,
                 "since": since,
+                "media_filters": request.media_filters,
+                "forum_top_n": request.forum_top_n,
             },
         )
         try:
@@ -68,12 +84,14 @@ class NewsIngestService:
             stats = self.repo.upsert_many(batch.batch_id, fetch_result.records)
             new_wm = since
             if request.kind in _WATERMARK_KINDS:
+                # fetch 可能改写 source.channel
+                channel = getattr(active, "channel", channel) or channel
                 if fetch_result.max_publish_time and (
                     since is None or fetch_result.max_publish_time > since
                 ):
                     new_wm = fetch_result.max_publish_time
                     self.repo.set_watermark(
-                        active.source, active.channel, new_wm, watch_key
+                        active.source, channel, new_wm, watch_key
                     )
             self.batches.commit(batch.batch_id)
             return IngestResult(
@@ -112,4 +130,9 @@ class NewsIngestService:
     def _watch_key(request: FetchRequest) -> str:
         if request.kind == "news_watchlist":
             return "watch:" + ",".join(sorted(request.symbols or []))
+        if (
+            request.kind in {"news_official", "news_forum", "news_policy"}
+            and request.media_filters
+        ):
+            return "media:" + ",".join(sorted(m.lower() for m in request.media_filters))
         return ""

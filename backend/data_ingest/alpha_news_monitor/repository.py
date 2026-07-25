@@ -2,60 +2,78 @@ from __future__ import annotations
 
 from data_ingest.alpha_announcement.timeutil import utc_now_iso
 from data_ingest.alpha_news_monitor.models import NewsRecord, UpsertStats
+from shared.bulk_upsert import upsert_rows
 from shared.db import get_conn
 
 
 class NewsRepository:
     def upsert_many(self, batch_id: str, rows: list[NewsRecord]) -> UpsertStats:
-        stats = UpsertStats()
         if not rows:
-            return stats
-        ingested_at = utc_now_iso()
+            return UpsertStats()
+        dict_rows = [
+            {
+                "source_news_id": r.source_news_id,
+                "symbol": r.symbol,
+                "title": r.title,
+                "summary": r.summary,
+                "publish_time": r.publish_time,
+                "url": r.url,
+                "media_source": r.media_source,
+                "channel": r.channel,
+                "content_type": r.content_type,
+                "extra_json": r.extra_json,
+                "source": r.source,
+            }
+            for r in rows
+        ]
+        sql = """
+            INSERT INTO raw_news_media (
+                batch_id, source_news_id, symbol, title, summary,
+                publish_time, url, media_source, channel, content_type,
+                extra_json, source, ingested_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (source_news_id, source) DO UPDATE SET
+                batch_id=excluded.batch_id,
+                symbol=excluded.symbol,
+                title=excluded.title,
+                summary=excluded.summary,
+                publish_time=excluded.publish_time,
+                url=excluded.url,
+                media_source=excluded.media_source,
+                channel=excluded.channel,
+                content_type=excluded.content_type,
+                extra_json=excluded.extra_json,
+                ingested_at=excluded.ingested_at
+        """
+        value_keys = (
+            "source_news_id",
+            "symbol",
+            "title",
+            "summary",
+            "publish_time",
+            "url",
+            "media_source",
+            "channel",
+            "content_type",
+            "extra_json",
+            "source",
+        )
+        exist_sql = (
+            "SELECT 1 FROM raw_news_media WHERE source_news_id=? AND source=?"
+        )
         with get_conn() as conn:
-            for r in rows:
-                existed = conn.execute(
-                    """
-                    SELECT 1 FROM raw_news_media
-                    WHERE source_news_id = ? AND source = ?
-                    """,
-                    (r.source_news_id, r.source),
-                ).fetchone()
-                conn.execute(
-                    """
-                    INSERT INTO raw_news_media (
-                        batch_id, source_news_id, symbol, title, summary,
-                        publish_time, url, media_source, channel, source, ingested_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (source_news_id, source) DO UPDATE SET
-                        batch_id=excluded.batch_id,
-                        symbol=excluded.symbol,
-                        title=excluded.title,
-                        summary=excluded.summary,
-                        publish_time=excluded.publish_time,
-                        url=excluded.url,
-                        media_source=excluded.media_source,
-                        channel=excluded.channel,
-                        ingested_at=excluded.ingested_at
-                    """,
-                    (
-                        batch_id,
-                        r.source_news_id,
-                        r.symbol,
-                        r.title,
-                        r.summary,
-                        r.publish_time,
-                        r.url,
-                        r.media_source,
-                        r.channel,
-                        r.source,
-                        ingested_at,
-                    ),
-                )
-                if existed:
-                    stats.updated += 1
-                else:
-                    stats.inserted += 1
-        return stats
+            stats = upsert_rows(
+                conn,
+                sql=sql,
+                value_keys=value_keys,
+                rows=dict_rows,
+                batch_id=batch_id,
+                ingested_at=utc_now_iso(),
+                exist_sql=exist_sql,
+                exist_keys=("source_news_id", "source"),
+                log_label="news_media",
+            )
+        return UpsertStats(inserted=stats.inserted, updated=stats.updated)
 
     def get_watermark(self, source: str, channel: str, watch_key: str = "") -> str | None:
         with get_conn() as conn:

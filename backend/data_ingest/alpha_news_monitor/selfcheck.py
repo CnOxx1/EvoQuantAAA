@@ -47,6 +47,12 @@ def main() -> int:
     r3 = svc.run(FetchRequest(kind="news_watchlist", symbols=["600000"]))
     assert r3.status == "committed" and r3.fetched >= 1, r3
 
+    r4 = svc.run(FetchRequest(kind="news_policy"))
+    assert r4.status == "committed" and r4.fetched >= 2, r4
+
+    r5 = svc.run(FetchRequest(kind="news_forum", symbols=["600000"], forum_top_n=5))
+    assert r5.status == "committed" and r5.fetched >= 1, r5
+
     print("selfcheck OK: news_count=", NewsRepository().count_news())
     return 0
 

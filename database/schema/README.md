@@ -72,7 +72,7 @@
 | raw_block_trade | market_data | data_ingest/alpha_flow (block_trade) | data_process, research_lab | 源事件 ID + trade_date | ALPHA P2 |
 | raw_announcement | market_data | data_ingest/alpha_announcement | data_process, research_lab, risk_engine | source_ann_id+source；必含 publish_time、category_raw、channel | ALPHA；点时=publish_time；正文用 content_uri |
 | ingest_announcement_watermark | oltp | data_ingest/alpha_announcement | alpha_announcement, ops_monitor | (source, channel, watch_key?) | 公告增量/订阅水位线 |
-| raw_news_media | market_data | data_ingest/alpha_news_monitor | data_process, research_lab, ops_monitor | 源 ID/哈希 + batch_id | ALPHA；与公告分表 |
+| raw_news_media | market_data | data_ingest/alpha_news_monitor | data_process, research_lab, ops_monitor | 源 ID/哈希 + batch_id | ALPHA；与公告分表；channel=official/forum/policy；`content_type`（含 policy/policy_index）与 `extra_json`（情绪分、`policy_tags`/`tone_hint`/EPU） |
 | ingest_news_watermark | oltp | data_ingest/alpha_news_monitor | alpha_news_monitor, ops_monitor | (source, channel) | 新闻监控水位线 |
 | raw_*（统称） | market_data | data_ingest | data_process | batch_id | 提交后可见 |
 | process_batch | oltp | data_process | data_quality, ops_monitor | process_batch_id | created→committed/failed |

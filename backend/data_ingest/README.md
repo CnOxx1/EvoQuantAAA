@@ -33,7 +33,7 @@
 | ALPHA | alpha_fundamental | `alpha_fundamental/` | P1 | 财报 + 估值/股东 + 一致预期 | `statement` / `indicator` / `valuation` / `holder` / `consensus` |
 | ALPHA | alpha_flow | `alpha_flow/` | P1 | 资金 + 两融/龙虎榜/大宗(P2) | 见下 |
 | ALPHA | alpha_announcement | `alpha_announcement/` | P1 | 法定公告监控/回填 | `ann_incremental` / `ann_watchlist` / `ann_backfill` / `ann_by_category`(P2) |
-| ALPHA | alpha_news_monitor | `alpha_news_monitor/` | P1 | 新闻资讯监控获取 | `news_incremental` / `news_watchlist` / `news_backfill` |
+| ALPHA | alpha_news_monitor | `alpha_news_monitor/` | P1 | 新闻/快讯/论坛情绪/政策语境 | `news_*`（见下） |
 
 ### core_ref kinds
 
@@ -68,6 +68,17 @@
 | `dragon_tiger_seat` | P2 | `raw_dragon_tiger_seat` | 龙虎榜活跃营业部 |
 | `block_trade` | P2 | `raw_block_trade` | 大宗 |
 
+### alpha_news_monitor kinds
+
+| ingest_kind | 优先级 | 输出 | 量化用途 |
+| --- | --- | --- | --- |
+| `news_incremental` / `news_watchlist` / `news_backfill` | P1 | `raw_news_media` | 东财快讯、个股资讯、可选 CCTV |
+| `news_official` | P1 | `raw_news_media` | 通讯社快讯 + 财经早餐/财新（`--media`） |
+| `news_forum` | P1 | `raw_news_media` | 千股千评/雪球/微博；扩展百度热搜·投票等需显式 `--media` |
+| `news_policy` | P1 | `raw_news_media` | 政策语境（早餐/财新/EPU + 可选 CCTV/经济日历/财联社政策过滤）；`policy_tags`/`tone_hint` |
+
+明细与接口映射见 `alpha_news_monitor/README.md`。法定公告仍在 `alpha_announcement`，禁止混表。
+
 ## 明确暂不新建的模块
 
 | 数据 | 落点 | 何时才拆新模块 |
@@ -100,9 +111,9 @@
 ```text
 阶段 A（必须）：core_ref P0 → core_market P0 → data_process P0 → data_quality
 阶段 B：alpha_fundamental(statement/indicator) + alpha_announcement(ann_incremental/watchlist/backfill)
-阶段 C：alpha_flow(northbound/stock_flow) + alpha_news_monitor
-阶段 D（增强 kind）：core_ref index_member / special_treat
-阶段 E（按需）：alpha_flow margin/dragon_tiger/block_trade；fundamental consensus
+阶段 C：alpha_flow(northbound/stock_flow) + alpha_news_monitor(official/forum/policy)
+阶段 D（增强 kind）：core_ref index_member / special_treat / restricted_release
+阶段 E（按需）：alpha_flow margin/dragon_tiger/block_trade；fundamental consensus/valuation/holder
 ```
 
 批量续跑（推荐：龙头 Universe）：
@@ -139,6 +150,11 @@ python main.py core_ref --kind restricted_release --start 2026-07-01 --end 2026-
 python main.py alpha_flow --p1 --universe SECTOR_LEADERS --start 2024-08-01 --end 2024-08-16 --chunk-size 15
 python main.py alpha_flow --kind dragon_tiger --start 2026-07-01 --end 2026-07-23
 
+# 新闻 / 论坛情绪 / 政策语境
+python main.py alpha_news_monitor --kind news_official --media cls --media cjzc
+python main.py alpha_news_monitor --kind news_forum --forum-top-n 50
+python main.py alpha_news_monitor --kind news_policy
+
 # 交易日增量（CORE → process → DQ；--with-alpha 含估值/龙虎榜）
 python main.py daily --universe TOP100 --as-of 2026-07-23
 
@@ -172,4 +188,4 @@ python main.py core_market --kind equity_1d --start 2026-07-01 --end 2026-07-23 
 | ST 历史过滤？ | core_ref/special_treat | 风险过滤偏弱 |
 | 基本面/预期？ | alpha_fundamental | 可选 |
 | 资金/两融/龙虎榜？ | alpha_flow | 可选 |
-| 公告/新闻？ | alpha_announcement / alpha_news_monitor | 可选 |
+| 公告/新闻/政策语境？ | alpha_announcement / alpha_news_monitor | 可选 |
