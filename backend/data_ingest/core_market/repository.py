@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 from data_ingest.alpha_announcement.timeutil import utc_now_iso
 from data_ingest.core_market.models import FetchBundle, IngestKind, UpsertStats
+from shared.bulk_upsert import upsert_rows
 from shared.db import get_conn
 
 _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
@@ -130,6 +129,99 @@ _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
         """,
         ("symbol", "ex_date", "action_type", "raw_payload", "source"),
     ),
+    "market_rank": (
+        """
+        INSERT INTO raw_market_rank_1d (
+            batch_id, trade_date, rank_type, rank_no, symbol, name,
+            metric_value, close, pct_chg, volume, amount, turnover,
+            extra_json, source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(trade_date, rank_type, symbol, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            rank_no=excluded.rank_no,
+            name=excluded.name,
+            metric_value=excluded.metric_value,
+            close=excluded.close,
+            pct_chg=excluded.pct_chg,
+            volume=excluded.volume,
+            amount=excluded.amount,
+            turnover=excluded.turnover,
+            extra_json=excluded.extra_json,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "trade_date",
+            "rank_type",
+            "rank_no",
+            "symbol",
+            "name",
+            "metric_value",
+            "close",
+            "pct_chg",
+            "volume",
+            "amount",
+            "turnover",
+            "extra_json",
+            "source",
+        ),
+    ),
+    "abnormal_move": (
+        """
+        INSERT INTO raw_abnormal_move (
+            batch_id, trade_date, event_time, symbol, name, change_type,
+            related_info, extra_json, source_event_id, source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(trade_date, change_type, symbol, source_event_id, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            event_time=excluded.event_time,
+            name=excluded.name,
+            related_info=excluded.related_info,
+            extra_json=excluded.extra_json,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "trade_date",
+            "event_time",
+            "symbol",
+            "name",
+            "change_type",
+            "related_info",
+            "extra_json",
+            "source_event_id",
+            "source",
+        ),
+    ),
+    "board_1d": (
+        """
+        INSERT INTO raw_board_bar_1d (
+            batch_id, board_type, board_code, board_name, trade_date,
+            open, high, low, close, volume, amount, pct_chg, turnover,
+            source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(board_type, board_name, trade_date, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            board_code=excluded.board_code,
+            open=excluded.open, high=excluded.high, low=excluded.low,
+            close=excluded.close, volume=excluded.volume, amount=excluded.amount,
+            pct_chg=excluded.pct_chg, turnover=excluded.turnover,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "board_type",
+            "board_code",
+            "board_name",
+            "trade_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "pct_chg",
+            "turnover",
+            "source",
+        ),
+    ),
 }
 
 _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
@@ -157,29 +249,41 @@ _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
         "SELECT 1 FROM raw_corp_action WHERE symbol=? AND ex_date=? AND action_type=? AND source=?",
         ("symbol", "ex_date", "action_type", "source"),
     ),
+    "market_rank": (
+        "SELECT 1 FROM raw_market_rank_1d WHERE trade_date=? AND rank_type=? AND symbol=? AND source=?",
+        ("trade_date", "rank_type", "symbol", "source"),
+    ),
+    "abnormal_move": (
+        "SELECT 1 FROM raw_abnormal_move WHERE trade_date=? AND change_type=? AND symbol=? AND source_event_id=? AND source=?",
+        ("trade_date", "change_type", "symbol", "source_event_id", "source"),
+    ),
+    "board_1d": (
+        "SELECT 1 FROM raw_board_bar_1d WHERE board_type=? AND board_name=? AND trade_date=? AND source=?",
+        ("board_type", "board_name", "trade_date", "source"),
+    ),
 }
 
 
 class CoreMarketRepository:
     def upsert_bundle(self, batch_id: str, bundle: FetchBundle) -> UpsertStats:
-        stats = UpsertStats()
+        """幂等写入：大包分块 executemany，小包保留 EXISTS 统计。"""
         if not bundle.rows:
-            return stats
+            return UpsertStats()
         sql, value_keys = _UPSERT_SQL[bundle.kind]
         exist_sql, exist_keys = _EXIST_SQL[bundle.kind]
-        ingested_at = utc_now_iso()
         with get_conn() as conn:
-            for row in bundle.rows:
-                existed = conn.execute(
-                    exist_sql, tuple(row[k] for k in exist_keys)
-                ).fetchone()
-                values = (batch_id, *(row[k] for k in value_keys), ingested_at)
-                conn.execute(sql, values)
-                if existed:
-                    stats.updated += 1
-                else:
-                    stats.inserted += 1
-        return stats
+            stats = upsert_rows(
+                conn,
+                sql=sql,
+                value_keys=value_keys,
+                rows=bundle.rows,
+                batch_id=batch_id,
+                ingested_at=utc_now_iso(),
+                exist_sql=exist_sql,
+                exist_keys=exist_keys,
+                log_label=bundle.kind,
+            )
+        return UpsertStats(inserted=stats.inserted, updated=stats.updated)
 
     def counts(self) -> dict[str, int]:
         tables = [
@@ -189,6 +293,9 @@ class CoreMarketRepository:
             "raw_limit_board",
             "raw_index_bar_1d",
             "raw_corp_action",
+            "raw_market_rank_1d",
+            "raw_abnormal_move",
+            "raw_board_bar_1d",
         ]
         out: dict[str, int] = {}
         with get_conn() as conn:

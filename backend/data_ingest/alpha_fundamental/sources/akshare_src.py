@@ -101,6 +101,8 @@ class AkshareFundamentalSource(FundamentalSource):
     - statement  → profit/balance/cashflow_sheet_by_report_em（长表科目）
     - indicator  → stock_financial_analysis_indicator_em（回退新浪指标）
     - consensus  → stock_profit_forecast_em（全市场快照，asof=拉取日）
+    - valuation  → stock_value_em（日频 PE/PB/市值）
+    - holder     → stock_zh_a_gdhs_detail_em（股东户数）
     """
 
     source = "akshare"
@@ -124,6 +126,10 @@ class AkshareFundamentalSource(FundamentalSource):
             rows = self._indicator(ak, request)
         elif request.kind == "consensus":
             rows = self._consensus(ak, request)
+        elif request.kind == "valuation":
+            rows = self._valuation(ak, request)
+        elif request.kind == "holder":
+            rows = self._holder(ak, request)
         else:
             raise ValueError(f"unsupported kind: {request.kind}")
         logger.info(
@@ -134,6 +140,13 @@ class AkshareFundamentalSource(FundamentalSource):
     def _pause(self) -> None:
         if self.request_pause > 0:
             time.sleep(self.request_pause)
+
+    def _call(self, fn: Any, *, label: str) -> Any:
+        from shared.akshare_call import call_with_retry
+
+        return call_with_retry(
+            fn, label=label, attempts=3, pause=self.request_pause, backoff=0.6
+        )
 
     def _require_symbols(self, request: FetchRequest) -> list[str]:
         symbols = [_plain(s) for s in request.symbols if s.strip()]
@@ -490,4 +503,114 @@ class AkshareFundamentalSource(FundamentalSource):
                 )
         if not rows:
             raise RuntimeError("consensus 未拉到预期数据")
+        return rows
+
+    def _valuation(self, ak: Any, request: FetchRequest) -> list[dict]:
+        """日频估值：stock_value_em（东财）；按 start/end 过滤。"""
+        symbols = self._require_symbols(request)
+        if not (request.start and request.end):
+            raise ValueError("valuation 必须提供 --start 与 --end")
+        rows: list[dict] = []
+        for symbol in symbols:
+            try:
+                df = self._call(
+                    lambda s=symbol: ak.stock_value_em(symbol=s),
+                    label=f"stock_value_em:{symbol}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("valuation %s 失败: %s", symbol, exc)
+                continue
+            if df is None or getattr(df, "empty", True):
+                continue
+            c_date = col_by_keywords(df.columns, ("数据日期", "日期")) or df.columns[0]
+            c_close = col_by_keywords(df.columns, ("当日收盘价", "收盘"))
+            c_pe = col_by_keywords(df.columns, ("PE(TTM)", "市盈率"))
+            c_pe_s = col_by_keywords(df.columns, ("PE(静)",))
+            c_pb = col_by_keywords(df.columns, ("市净率", "PB"))
+            c_ps = col_by_keywords(df.columns, ("市销率", "PS"))
+            c_pcf = col_by_keywords(df.columns, ("市现率", "PCF"))
+            c_peg = col_by_keywords(df.columns, ("PEG",))
+            c_tmv = col_by_keywords(df.columns, ("总市值",))
+            c_fmv = col_by_keywords(df.columns, ("流通市值",))
+            c_ts = col_by_keywords(df.columns, ("总股本",))
+            c_fs = col_by_keywords(df.columns, ("流通股本",))
+            for _, r in df.iterrows():
+                day = _parse_day(r[c_date])
+                if not self._in_range(day, request.start, request.end):
+                    continue
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "trade_date": day.isoformat() if day else as_str(r[c_date])[:10],
+                        "close": _finite(as_float(r[c_close])) if c_close is not None else None,
+                        "pe_ttm": _finite(as_float(r[c_pe])) if c_pe is not None else None,
+                        "pe_static": _finite(as_float(r[c_pe_s])) if c_pe_s is not None else None,
+                        "pb": _finite(as_float(r[c_pb])) if c_pb is not None else None,
+                        "ps_ttm": _finite(as_float(r[c_ps])) if c_ps is not None else None,
+                        "pcf_ttm": _finite(as_float(r[c_pcf])) if c_pcf is not None else None,
+                        "peg": _finite(as_float(r[c_peg])) if c_peg is not None else None,
+                        "total_mv": _finite(as_float(r[c_tmv])) if c_tmv is not None else None,
+                        "float_mv": _finite(as_float(r[c_fmv])) if c_fmv is not None else None,
+                        "total_shares": _finite(as_float(r[c_ts])) if c_ts is not None else None,
+                        "float_shares": _finite(as_float(r[c_fs])) if c_fs is not None else None,
+                        "source": self.source,
+                    }
+                )
+        return rows
+
+    def _holder(self, ak: Any, request: FetchRequest) -> list[dict]:
+        """股东户数：stock_zh_a_gdhs_detail_em。"""
+        symbols = self._require_symbols(request)
+        rows: list[dict] = []
+        for symbol in symbols:
+            try:
+                df = self._call(
+                    lambda s=symbol: ak.stock_zh_a_gdhs_detail_em(symbol=s),
+                    label=f"gdhs_detail:{symbol}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("holder %s 失败: %s", symbol, exc)
+                continue
+            if df is None or getattr(df, "empty", True):
+                continue
+            c_asof = col_by_keywords(df.columns, ("股东户数统计截止日", "截止日"))
+            c_ann = col_by_keywords(df.columns, ("股东户数公告日期", "公告日期"))
+            c_cnt = col_by_keywords(df.columns, ("股东户数-本次", "本次"))
+            c_prev = col_by_keywords(df.columns, ("股东户数-上次", "上次"))
+            c_chg = col_by_keywords(df.columns, ("股东户数-增减",))
+            c_pct = col_by_keywords(df.columns, ("股东户数-增减比例", "增减比例"))
+            c_avg_mv = col_by_keywords(df.columns, ("户均持股市值",))
+            c_avg_sh = col_by_keywords(df.columns, ("户均持股数量",))
+            c_tmv = col_by_keywords(df.columns, ("总市值",))
+            c_ts = col_by_keywords(df.columns, ("总股本",))
+            if c_asof is None:
+                c_asof = df.columns[0]
+            for _, r in df.iterrows():
+                day = _parse_day(r[c_asof])
+                if request.start or request.end:
+                    if not self._in_range(day, request.start, request.end):
+                        continue
+                asof = day.isoformat() if day else as_str(r[c_asof])[:10]
+                if not asof:
+                    continue
+                ann = None
+                if c_ann is not None:
+                    ad = _parse_day(r[c_ann])
+                    ann = ad.isoformat() if ad else as_str(r[c_ann])[:10] or None
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "asof_date": asof,
+                        "announce_date": ann,
+                        "holder_count": _finite(as_float(r[c_cnt])) if c_cnt is not None else None,
+                        "holder_count_prev": _finite(as_float(r[c_prev])) if c_prev is not None else None,
+                        "holder_change": _finite(as_float(r[c_chg])) if c_chg is not None else None,
+                        "holder_change_pct": _finite(as_float(r[c_pct])) if c_pct is not None else None,
+                        "avg_market_cap": _finite(as_float(r[c_avg_mv])) if c_avg_mv is not None else None,
+                        "avg_shares": _finite(as_float(r[c_avg_sh])) if c_avg_sh is not None else None,
+                        "total_mv": _finite(as_float(r[c_tmv])) if c_tmv is not None else None,
+                        "total_shares": _finite(as_float(r[c_ts])) if c_ts is not None else None,
+                        "source": self.source,
+                    }
+                )
         return rows

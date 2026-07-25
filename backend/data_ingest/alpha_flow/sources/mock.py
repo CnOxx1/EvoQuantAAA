@@ -16,6 +16,7 @@ class MockFlowSource(FlowSource):
             "stock_flow": self._stock_flow,
             "margin": self._margin,
             "dragon_tiger": self._dragon,
+            "dragon_tiger_seat": self._dragon_seat,
             "block_trade": self._block,
         }
         if request.kind not in dispatch:
@@ -104,6 +105,24 @@ class MockFlowSource(FlowSource):
                 "buy_amount": 2e7,
                 "sell_amount": 3e7,
                 "source_event_id": f"000078|{ds}|mock",
+                "source": self.source,
+            }
+        ]
+
+    def _dragon_seat(self, request: FetchRequest) -> list[dict]:
+        ds = self._dates(request)[-1] if self._dates(request) else "2026-07-23"
+        return [
+            {
+                "trade_date": ds,
+                "seat_name": "MOCK营业部",
+                "seat_code": "10000000",
+                "buy_count": 2,
+                "sell_count": 1,
+                "buy_amount": 1e8,
+                "sell_amount": 2e7,
+                "net_amount": 8e7,
+                "related_stocks": "600000 000001",
+                "source_event_id": f"{ds}|10000000|0",
                 "source": self.source,
             }
         ]

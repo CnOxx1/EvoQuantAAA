@@ -36,7 +36,11 @@
 ```bash
 cd backend
 python main.py migrate
+# 短窗
 python main.py data_process --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001 --index 000300
+# 长窗（Universe 点时建议用快照 as_of，勿用区间起点）
+python main.py data_process --p0 --universe TOP100 --universe-as-of 2026-07-23 \
+  --start 2023-01-01 --end 2026-07-23 --factor-type qfq --index 000300
 python -m data_process.selfcheck
 ```
 

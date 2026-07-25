@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 from data_ingest.alpha_announcement.timeutil import utc_now_iso
 from data_ingest.core_ref.models import FetchBundle, IngestKind, UpsertStats
+from shared.bulk_upsert import upsert_rows
 from shared.db import get_conn
 
 _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
@@ -104,6 +103,42 @@ _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
         """,
         ("symbol", "treat_type", "effective_date", "end_date", "source"),
     ),
+    "restricted_release": (
+        """
+        INSERT INTO raw_restricted_release (
+            batch_id, symbol, name, release_date, share_type, release_shares,
+            actual_shares, actual_mv, float_ratio, pre_close, pct_chg_b20,
+            pct_chg_a20, source_event_id, source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(symbol, release_date, source_event_id, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            name=excluded.name,
+            share_type=excluded.share_type,
+            release_shares=excluded.release_shares,
+            actual_shares=excluded.actual_shares,
+            actual_mv=excluded.actual_mv,
+            float_ratio=excluded.float_ratio,
+            pre_close=excluded.pre_close,
+            pct_chg_b20=excluded.pct_chg_b20,
+            pct_chg_a20=excluded.pct_chg_a20,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "symbol",
+            "name",
+            "release_date",
+            "share_type",
+            "release_shares",
+            "actual_shares",
+            "actual_mv",
+            "float_ratio",
+            "pre_close",
+            "pct_chg_b20",
+            "pct_chg_a20",
+            "source_event_id",
+            "source",
+        ),
+    ),
 }
 
 _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
@@ -131,29 +166,32 @@ _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
         "SELECT 1 FROM raw_special_treat WHERE symbol=? AND effective_date=? AND treat_type=? AND source=?",
         ("symbol", "effective_date", "treat_type", "source"),
     ),
+    "restricted_release": (
+        "SELECT 1 FROM raw_restricted_release WHERE symbol=? AND release_date=? AND source_event_id=? AND source=?",
+        ("symbol", "release_date", "source_event_id", "source"),
+    ),
 }
 
 
 class CoreRefRepository:
     def upsert_bundle(self, batch_id: str, bundle: FetchBundle) -> UpsertStats:
-        stats = UpsertStats()
         if not bundle.rows:
-            return stats
+            return UpsertStats()
         sql, value_keys = _UPSERT_SQL[bundle.kind]
         exist_sql, exist_keys = _EXIST_SQL[bundle.kind]
-        ingested_at = utc_now_iso()
         with get_conn() as conn:
-            for row in bundle.rows:
-                exist_params = tuple(row[k] for k in exist_keys)
-                existed = conn.execute(exist_sql, exist_params).fetchone()
-                values = (batch_id, *(row[k] for k in value_keys), ingested_at)
-                # value_keys already includes source; sql placeholders match
-                conn.execute(sql, values)
-                if existed:
-                    stats.updated += 1
-                else:
-                    stats.inserted += 1
-        return stats
+            stats = upsert_rows(
+                conn,
+                sql=sql,
+                value_keys=value_keys,
+                rows=bundle.rows,
+                batch_id=batch_id,
+                ingested_at=utc_now_iso(),
+                exist_sql=exist_sql,
+                exist_keys=exist_keys,
+                log_label=bundle.kind,
+            )
+        return UpsertStats(inserted=stats.inserted, updated=stats.updated)
 
     def counts(self) -> dict[str, int]:
         tables = [
@@ -163,6 +201,7 @@ class CoreRefRepository:
             "raw_share_capital",
             "raw_index_member",
             "raw_special_treat",
+            "raw_restricted_release",
         ]
         out: dict[str, int] = {}
         with get_conn() as conn:

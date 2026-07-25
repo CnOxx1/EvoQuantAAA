@@ -10,6 +10,7 @@ IngestKind = Literal[
     "share_capital",
     "index_member",
     "special_treat",
+    "restricted_release",
 ]
 
 VALID_KINDS: tuple[str, ...] = (
@@ -19,6 +20,7 @@ VALID_KINDS: tuple[str, ...] = (
     "share_capital",
     "index_member",
     "special_treat",
+    "restricted_release",
 )
 
 P0_KINDS: tuple[str, ...] = ("calendar", "listing", "industry", "share_capital")
@@ -32,6 +34,7 @@ class FetchRequest:
     exchange: str = "SSE"
     industry_standard: str = "SW2021"
     index_symbols: list[str] = field(default_factory=list)
+    symbols: list[str] = field(default_factory=list)
     job_id: str | None = None
 
 

@@ -24,6 +24,12 @@ class MockCoreMarketSource(CoreMarketSource):
             rows = self._index(request)
         elif request.kind == "corp_action":
             rows = self._corp(request)
+        elif request.kind == "market_rank":
+            rows = self._market_rank(request)
+        elif request.kind == "abnormal_move":
+            rows = self._abnormal_move(request)
+        elif request.kind == "board_1d":
+            rows = self._board_1d(request)
         else:
             raise ValueError(f"unsupported kind: {request.kind}")
         return FetchBundle(kind=request.kind, rows=rows, source=self.source)
@@ -173,3 +179,87 @@ class MockCoreMarketSource(CoreMarketSource):
                 "source": self.source,
             },
         ]
+
+    def _market_rank(self, request: FetchRequest) -> list[dict]:
+        top_n = max(1, int(getattr(request, "top_n", None) or 100))
+        rank_types = list(getattr(request, "rank_types", None) or []) or [
+            "PCT_CHG_UP",
+            "VOLUME",
+            "AMOUNT",
+        ]
+        symbols = self._symbols(request)[:top_n]
+        rows: list[dict] = []
+        for ds in self._dates(request):
+            for i, symbol in enumerate(symbols):
+                base = {
+                    "trade_date": ds,
+                    "rank_no": i + 1,
+                    "symbol": symbol,
+                    "name": f"MOCK-{symbol}",
+                    "close": 10.0 + i,
+                    "pct_chg": 9.0 - i,
+                    "volume": 1_000_000.0 - i * 1000,
+                    "amount": 50_000_000.0 - i * 10_000,
+                    "turnover": 5.0 - i * 0.1,
+                    "extra_json": None,
+                    "source": self.source,
+                }
+                for rt in rank_types:
+                    metric = {
+                        "PCT_CHG_UP": base["pct_chg"],
+                        "PCT_CHG_DOWN": -base["pct_chg"],
+                        "VOLUME": base["volume"],
+                        "AMOUNT": base["amount"],
+                        "TURNOVER": base["turnover"],
+                        "HOT": float(100 - i),
+                    }.get(rt, base["pct_chg"])
+                    rows.append({**base, "rank_type": rt, "metric_value": metric})
+        return rows
+
+    def _abnormal_move(self, request: FetchRequest) -> list[dict]:
+        day = (request.end or "2026-07-23")[:10]
+        types = list(getattr(request, "change_types", None) or []) or ["火箭发射", "大笔买入"]
+        symbols = self._symbols(request)
+        rows: list[dict] = []
+        for i, symbol in enumerate(symbols):
+            for ct in types:
+                rows.append(
+                    {
+                        "trade_date": day,
+                        "event_time": f"09:30:{i:02d}",
+                        "symbol": symbol,
+                        "name": f"MOCK-{symbol}",
+                        "change_type": ct,
+                        "related_info": "mock",
+                        "extra_json": None,
+                        "source_event_id": f"{symbol}|{day}|{ct}|09:30:{i:02d}|{i}",
+                        "source": self.source,
+                    }
+                )
+        return rows
+
+    def _board_1d(self, request: FetchRequest) -> list[dict]:
+        names = list(request.board_names) or ["煤炭行业", "银行"]
+        types = [t.upper() for t in (request.board_types or [])] or ["INDUSTRY"]
+        rows: list[dict] = []
+        for board_type in types:
+            for name in names:
+                for d in self._dates(request):
+                    rows.append(
+                        {
+                            "board_type": board_type,
+                            "board_code": "BK0001",
+                            "board_name": name,
+                            "trade_date": d,
+                            "open": 1000.0,
+                            "high": 1010.0,
+                            "low": 990.0,
+                            "close": 1005.0,
+                            "volume": 1e8,
+                            "amount": 1e10,
+                            "pct_chg": 0.5,
+                            "turnover": 1.2,
+                            "source": self.source,
+                        }
+                    )
+        return rows

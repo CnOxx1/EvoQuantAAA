@@ -8,15 +8,39 @@ from data_ingest.core_market.repository import CoreMarketRepository
 from data_ingest.core_market.sources import get_source
 from data_ingest.core_market.sources.base import CoreMarketSource
 from data_ingest.ingest_common.batch import BatchManager
-from shared.ingest_batching import chunk_symbols
+from shared.ingest_batching import (
+    chunk_date_ranges,
+    chunk_symbols,
+    missing_date_ranges,
+)
 
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "core_market"
 _SYMBOL_KINDS = frozenset({"equity_1d", "adj_factor", "corp_action"})
 _RANGE_KINDS = frozenset(
-    {"equity_1d", "adj_factor", "suspend", "limit", "index_1d", "corp_action"}
+    {
+        "equity_1d",
+        "adj_factor",
+        "suspend",
+        "limit",
+        "index_1d",
+        "corp_action",
+        "market_rank",
+        "abnormal_move",
+        "board_1d",
+    }
 )
+_DATE_CHUNK_KINDS = frozenset(
+    {"suspend", "limit", "market_rank", "abnormal_move", "board_1d"}
+)
+_DATE_CHUNK_TABLES: dict[str, tuple[str, str]] = {
+    "suspend": ("raw_suspend", "trade_date"),
+    "limit": ("raw_limit_board", "trade_date"),
+    "market_rank": ("raw_market_rank_1d", "trade_date"),
+    "abnormal_move": ("raw_abnormal_move", "trade_date"),
+    "board_1d": ("raw_board_bar_1d", "trade_date"),
+}
 _MARKET_WIDE_P0 = ("suspend", "limit", "index_1d")
 _PER_SYMBOL_P0 = ("equity_1d", "adj_factor")
 
@@ -61,6 +85,10 @@ class CoreMarketIngestService:
                 "index_symbols": request.index_symbols,
                 "start": request.start,
                 "end": request.end,
+                "top_n": request.top_n,
+                "rank_types": request.rank_types,
+                "board_types": request.board_types,
+                "board_names": request.board_names,
             },
         )
         try:
@@ -95,6 +123,69 @@ class CoreMarketIngestService:
                 updated=0,
                 message=str(exc),
             )
+
+    def run_range_kind_chunked(
+        self,
+        request_base: FetchRequest,
+        *,
+        chunk_months: int = 1,
+        skip_existing: bool = False,
+        min_days: int = 1,
+    ) -> list[IngestResult]:
+        """按月分块跑区间 kind；可跳过已覆盖月份。"""
+        if request_base.kind not in _DATE_CHUNK_KINDS:
+            raise ValueError(f"{request_base.kind} 不支持按日期分块")
+        if not (request_base.start and request_base.end):
+            raise ValueError(f"{request_base.kind} 必须提供 --start 与 --end")
+        if skip_existing:
+            table, col = _DATE_CHUNK_TABLES[request_base.kind]
+            ranges = missing_date_ranges(
+                table,
+                col,
+                request_base.start,
+                request_base.end,
+                months=chunk_months,
+                source=getattr(self.source, "source", None),
+                min_days=min_days,
+            )
+            logger.info(
+                "core_market date-chunk skip_existing kind=%s keep %s months",
+                request_base.kind,
+                len(ranges),
+            )
+        else:
+            ranges = chunk_date_ranges(
+                request_base.start, request_base.end, months=chunk_months
+            )
+        results: list[IngestResult] = []
+        for i, (s, e) in enumerate(ranges, start=1):
+            req = FetchRequest(
+                kind=request_base.kind,  # type: ignore[arg-type]
+                start=s,
+                end=e,
+                symbols=list(request_base.symbols),
+                index_symbols=list(request_base.index_symbols),
+                job_id=request_base.job_id,
+                top_n=request_base.top_n,
+                rank_types=list(request_base.rank_types),
+                prefer_spot=request_base.prefer_spot,
+                change_types=list(request_base.change_types),
+                board_types=list(request_base.board_types),
+                board_names=list(request_base.board_names),
+            )
+            r = self.run(req)
+            results.append(r)
+            logger.info(
+                "core_market date-chunk kind=%s [%s/%s] %s..%s status=%s fetched=%s",
+                request_base.kind,
+                i,
+                len(ranges),
+                s,
+                e,
+                r.status,
+                r.fetched,
+            )
+        return results
 
     def run_p0(self, request_base: FetchRequest) -> list[IngestResult]:
         """P0：equity_1d → adj_factor → suspend → limit → index_1d。"""
@@ -151,14 +242,14 @@ class CoreMarketIngestService:
         request_base: FetchRequest,
         *,
         chunk_size: int = 15,
+        chunk_months: int = 1,
     ) -> list[IngestResult]:
         """
         覆盖型 P0：全市场类 kind 各跑一次；equity/adj 按 chunk 提交。
-        单 chunk 失败不中断后续（便于 HS300 增量灌数）。
+        suspend/limit 按月分块。单 chunk 失败不中断后续。
         """
         results: list[IngestResult] = []
 
-        # 先灌逐票行情，再灌区间事件（事件不依赖 symbols）
         for kind in _PER_SYMBOL_P0:
             req = FetchRequest(
                 kind=kind,  # type: ignore[arg-type]
@@ -170,7 +261,7 @@ class CoreMarketIngestService:
             )
             results.extend(self.run_symbol_kind_chunked(req, chunk_size=chunk_size))
 
-        for kind in _MARKET_WIDE_P0:
+        for kind in ("suspend", "limit"):
             req = FetchRequest(
                 kind=kind,  # type: ignore[arg-type]
                 start=request_base.start,
@@ -179,5 +270,17 @@ class CoreMarketIngestService:
                 index_symbols=list(request_base.index_symbols) or ["000300"],
                 job_id=request_base.job_id,
             )
-            results.append(self.run(req))
+            results.extend(
+                self.run_range_kind_chunked(req, chunk_months=chunk_months)
+            )
+
+        req = FetchRequest(
+            kind="index_1d",
+            start=request_base.start,
+            end=request_base.end,
+            symbols=[],
+            index_symbols=list(request_base.index_symbols) or ["000300"],
+            job_id=request_base.job_id,
+        )
+        results.append(self.run(req))
         return results

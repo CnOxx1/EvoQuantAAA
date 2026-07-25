@@ -3,9 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-IngestKind = Literal["statement", "indicator", "consensus"]
+IngestKind = Literal["statement", "indicator", "consensus", "valuation", "holder"]
 
-VALID_KINDS: tuple[str, ...] = ("statement", "indicator", "consensus")
+VALID_KINDS: tuple[str, ...] = (
+    "statement",
+    "indicator",
+    "consensus",
+    "valuation",
+    "holder",
+)
 P1_KINDS: tuple[str, ...] = ("statement", "indicator")
 
 StatementType = Literal["INCOME", "BALANCE", "CASHFLOW"]

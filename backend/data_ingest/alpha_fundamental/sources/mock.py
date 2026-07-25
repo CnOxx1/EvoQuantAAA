@@ -14,6 +14,10 @@ class MockFundamentalSource(FundamentalSource):
             rows = self._indicator(request)
         elif request.kind == "consensus":
             rows = self._consensus(request)
+        elif request.kind == "valuation":
+            rows = self._valuation(request)
+        elif request.kind == "holder":
+            rows = self._holder(request)
         else:
             raise ValueError(f"unsupported kind: {request.kind}")
         return FetchBundle(kind=request.kind, rows=rows, source=self.source)
@@ -82,4 +86,50 @@ class MockFundamentalSource(FundamentalSource):
                         "source": self.source,
                     }
                 )
+        return rows
+
+    def _valuation(self, request: FetchRequest) -> list[dict]:
+        day = (request.end or request.start or "2026-07-23")[:10]
+        rows = []
+        for symbol in self._symbols(request):
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "trade_date": day,
+                    "close": 100.0,
+                    "pe_ttm": 15.0,
+                    "pe_static": 14.0,
+                    "pb": 2.0,
+                    "ps_ttm": 3.0,
+                    "pcf_ttm": 10.0,
+                    "peg": 1.1,
+                    "total_mv": 1e11,
+                    "float_mv": 8e10,
+                    "total_shares": 1e9,
+                    "float_shares": 8e8,
+                    "source": self.source,
+                }
+            )
+        return rows
+
+    def _holder(self, request: FetchRequest) -> list[dict]:
+        asof = (request.end or "2026-06-30")[:10]
+        rows = []
+        for symbol in self._symbols(request):
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "asof_date": asof,
+                    "announce_date": asof,
+                    "holder_count": 100000.0,
+                    "holder_count_prev": 105000.0,
+                    "holder_change": -5000.0,
+                    "holder_change_pct": -4.76,
+                    "avg_market_cap": 5e5,
+                    "avg_shares": 5000.0,
+                    "total_mv": 5e10,
+                    "total_shares": 5e8,
+                    "source": self.source,
+                }
+            )
         return rows

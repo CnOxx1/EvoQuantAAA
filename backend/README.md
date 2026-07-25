@@ -62,17 +62,34 @@
 cd backend
 pip install -r requirements.txt
 python main.py migrate
+
+# 短窗冒烟
 python main.py core_ref --p0 --start 2026-07-01 --end 2026-07-31 --source akshare
-python main.py core_market --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
-python main.py data_process --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
-python main.py data_quality --scope CORE --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
 python main.py security_master --p0 --as-of 2026-07-23
-python main.py backtest --strategy EW_HOLD --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
+python main.py core_market --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
+
+# 长窗推荐（TOP100，见根 README / data_ingest/README）
+python main.py core_ref --kind calendar --start 2020-01-01 --end 2026-07-25
+python main.py core_market --p0 --universe TOP100 --start 2023-01-01 --end 2026-07-23 \
+  --skip-existing --min-bars 500 --chunk-size 8 --index 000300
+python main.py data_process --p0 --universe TOP100 --universe-as-of 2026-07-23 \
+  --start 2023-01-01 --end 2026-07-23 --factor-type qfq --index 000300
+python main.py data_quality --scope CORE --universe TOP100 --start 2023-01-01 --end 2026-07-23 \
+  --factor-type qfq --index 000300
+python main.py backtest --universe TOP100 --start 2023-01-01 --end 2026-07-23 \
+  --strategy EW_HOLD --factor-type qfq
+
+# 停牌/涨跌停长窗、交易日增量、估值等见 data_ingest/README
+python main.py core_market --kind suspend --start 2023-01-01 --end 2026-07-23 \
+  --chunk-months 1 --skip-existing
+python main.py daily --universe TOP100 --as-of 2026-07-23
 ```
 
-- 总入口：`main.py`（子命令按模块扩展）
+- 总入口：`main.py`（子命令按模块扩展；含 `daily` 交易日增量）
 - 环境：`research` / `paper` / `live`（待接线）
 - 默认库：PostgreSQL（pgembed / `ASHARE_DATABASE_URL`）；已弃用 SQLite
+- 行情 kinds / 接口映射：[`data_ingest/core_market/README.md`](./data_ingest/core_market/README.md)
+- 共享写库/重试：[`shared/README.md`](./shared/README.md)（`bulk_upsert` / `akshare_call`）
 
 ## 不变量
 - 跨模块只经已提交库数据交接

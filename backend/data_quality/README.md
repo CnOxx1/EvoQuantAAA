@@ -39,6 +39,9 @@ cd backend
 python main.py migrate
 python main.py data_process --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
 python main.py data_quality --scope CORE --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
+# 长窗：支持 --universe（与 data_process 一致）
+python main.py data_quality --scope CORE --universe TOP100 --start 2023-01-01 --end 2026-07-23 \
+  --factor-type qfq --index 000300
 python -m data_quality.selfcheck
 ```
 

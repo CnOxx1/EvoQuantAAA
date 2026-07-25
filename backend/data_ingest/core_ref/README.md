@@ -13,6 +13,7 @@
 | 股本 | `raw_share_capital` | kind=`share_capital` |
 | 指数成分权重 | `raw_index_member` | kind=`index_member`（P1） |
 | ST 等状态史 | `raw_special_treat` | kind=`special_treat`（P1） |
+| 限售解禁 | `raw_restricted_release` | kind=`restricted_release`（P1） |
 | 批次 | `ingest_batch` | 经 ingest_common |
 
 
@@ -27,6 +28,7 @@
 | `share_capital` | P0 | `raw_share_capital` | 市值、换手、权重 |
 | `index_member` | P1 | `raw_index_member` | 指数成分与权重时序（指数增强） |
 | `special_treat` | P1 | `raw_special_treat` | ST/*ST/退市整理等状态变更史 |
+| `restricted_release` | P1 | `raw_restricted_release` | 解禁日历（事件风险过滤） |
 
 ## 协作模块索引（供 AI Agent）
 
@@ -62,6 +64,9 @@ python main.py core_ref --kind industry --industry-standard SW2021
 python main.py core_ref --kind share_capital --share-sh-limit 80
 python main.py core_ref --kind index_member --index 000300
 python main.py core_ref --kind special_treat
+python main.py core_ref --kind restricted_release --start 2026-07-01 --end 2026-07-23
+python main.py core_ref --kind restricted_release --start 2026-07-01 --end 2026-07-23 \
+  --universe TOP100
 # 离线夹具
 python main.py core_ref --kind listing --source mock
 python -m data_ingest.core_ref.selfcheck
@@ -77,10 +82,11 @@ python -m data_ingest.core_ref.selfcheck
 | `share_capital` | 深/北列表股本 + `stock_zh_a_gbjg_em`（沪） | 沪市默认 `--share-sh-limit 80`，`0`=全量 |
 | `index_member` | `index_stock_cons_csindex`（回退 `index_stock_cons`） | 无权重时按等权占位 |
 | `special_treat` | `stock_zh_a_st_em`（回退名称含 ST） | 快照生效日=拉取日 |
+| `restricted_release` | `stock_restricted_release_detail_em`；有 `--symbol`/`--universe` 时再补 `stock_restricted_release_queue_em` | 按解禁日区间；可过滤龙头 |
 
 调度建议：
 - P0 日更：`calendar` → `listing` → `industry` ∥ `share_capital`（或 `--p0`）
-- P1：`special_treat`；`index_member`（按指数配置）
+- P1：`special_treat`；`index_member`（按指数配置）；`restricted_release` 按区间
 
 实现入口：`service.CoreRefIngestService`；总入口：`backend/main.py`。  
 默认源：`akshare`；离线联调用 `--source mock`。

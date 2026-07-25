@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from data_ingest.alpha_announcement.timeutil import utc_now_iso
 from data_ingest.alpha_flow.models import FetchBundle, IngestKind, UpsertStats
+from shared.bulk_upsert import upsert_rows
 from shared.db import get_conn
 
 _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
@@ -105,6 +106,38 @@ _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
             "source",
         ),
     ),
+    "dragon_tiger_seat": (
+        """
+        INSERT INTO raw_dragon_tiger_seat (
+            batch_id, trade_date, seat_name, seat_code, buy_count, sell_count,
+            buy_amount, sell_amount, net_amount, related_stocks,
+            source_event_id, source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(trade_date, seat_name, source_event_id, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            seat_code=excluded.seat_code,
+            buy_count=excluded.buy_count,
+            sell_count=excluded.sell_count,
+            buy_amount=excluded.buy_amount,
+            sell_amount=excluded.sell_amount,
+            net_amount=excluded.net_amount,
+            related_stocks=excluded.related_stocks,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "trade_date",
+            "seat_name",
+            "seat_code",
+            "buy_count",
+            "sell_count",
+            "buy_amount",
+            "sell_amount",
+            "net_amount",
+            "related_stocks",
+            "source_event_id",
+            "source",
+        ),
+    ),
     "block_trade": (
         """
         INSERT INTO raw_block_trade (
@@ -149,6 +182,10 @@ _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
         "SELECT 1 FROM raw_dragon_tiger WHERE symbol=? AND trade_date=? AND source_event_id=? AND source=?",
         ("symbol", "trade_date", "source_event_id", "source"),
     ),
+    "dragon_tiger_seat": (
+        "SELECT 1 FROM raw_dragon_tiger_seat WHERE trade_date=? AND seat_name=? AND source_event_id=? AND source=?",
+        ("trade_date", "seat_name", "source_event_id", "source"),
+    ),
     "block_trade": (
         "SELECT 1 FROM raw_block_trade WHERE symbol=? AND trade_date=? AND source_event_id=? AND source=?",
         ("symbol", "trade_date", "source_event_id", "source"),
@@ -158,30 +195,30 @@ _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
 
 class FlowRepository:
     def upsert_bundle(self, batch_id: str, bundle: FetchBundle) -> UpsertStats:
-        stats = UpsertStats()
         if not bundle.rows:
-            return stats
-        # northbound/stock_flow share same SQL keying via kind name in map
+            return UpsertStats()
         sql, value_keys = _UPSERT_SQL[bundle.kind]
         exist_sql, exist_keys = _EXIST_SQL[bundle.kind]
-        ingested_at = utc_now_iso()
         with get_conn() as conn:
-            for row in bundle.rows:
-                existed = conn.execute(
-                    exist_sql, tuple(row[k] for k in exist_keys)
-                ).fetchone()
-                conn.execute(sql, (batch_id, *(row[k] for k in value_keys), ingested_at))
-                if existed:
-                    stats.updated += 1
-                else:
-                    stats.inserted += 1
-        return stats
+            stats = upsert_rows(
+                conn,
+                sql=sql,
+                value_keys=value_keys,
+                rows=bundle.rows,
+                batch_id=batch_id,
+                ingested_at=utc_now_iso(),
+                exist_sql=exist_sql,
+                exist_keys=exist_keys,
+                log_label=bundle.kind,
+            )
+        return UpsertStats(inserted=stats.inserted, updated=stats.updated)
 
     def counts(self) -> dict[str, int]:
         tables = [
             "raw_money_flow",
             "raw_margin",
             "raw_dragon_tiger",
+            "raw_dragon_tiger_seat",
             "raw_block_trade",
         ]
         out: dict[str, int] = {}

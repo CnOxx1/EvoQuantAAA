@@ -10,10 +10,11 @@
 | 资金流向 | `raw_money_flow` | kind=`northbound` / `stock_flow` |
 | 融资融券 | `raw_margin` | kind=`margin`（P2） |
 | 龙虎榜 | `raw_dragon_tiger` | kind=`dragon_tiger`（P2） |
+| 龙虎榜营业部 | `raw_dragon_tiger_seat` | kind=`dragon_tiger_seat`（P2） |
 | 大宗交易 | `raw_block_trade` | kind=`block_trade`（P2） |
 | 批次 | `ingest_batch` | 经 ingest_common |
 
-迁移脚本：`database/migrations/005_alpha_flow.sql`。
+迁移脚本：`005_alpha_flow.sql`、`012_market_microstructure.sql`（席位表）。
 
 ## 本目录模块一览
 
@@ -22,7 +23,8 @@
 | `northbound` | P1 | `raw_money_flow` | 北向类因子（`NORTHBOUND`/`_SH`/`_SZ`） |
 | `stock_flow` | P1 | `raw_money_flow` | 个股资金（`STOCK_FLOW` / 回退 `STOCK_NORTHBOUND`） |
 | `margin` | P2 | `raw_margin` | 融资融券余额/标的 |
-| `dragon_tiger` | P2 | `raw_dragon_tiger` | 龙虎榜情绪/席位 |
+| `dragon_tiger` | P2 | `raw_dragon_tiger` | 龙虎榜个股上榜 |
+| `dragon_tiger_seat` | P2 | `raw_dragon_tiger_seat` | 每日活跃营业部净买 |
 | `block_trade` | P2 | `raw_block_trade` | 大宗交易折溢价 |
 
 ## 协作模块索引（供 AI Agent）
@@ -47,8 +49,9 @@ python main.py alpha_flow --p1 --start 2024-08-01 --end 2024-08-16 --symbol 6000
 python main.py alpha_flow --kind northbound --start 2024-08-01 --end 2024-08-16
 python main.py alpha_flow --kind stock_flow --start 2024-08-01 --end 2024-08-16 --symbol 600000
 python main.py alpha_flow --kind margin --start 2026-07-01 --end 2026-07-23 --symbol 600000
-python main.py alpha_flow --kind dragon_tiger --start 2026-07-21 --end 2026-07-23
-python main.py alpha_flow --kind block_trade --start 2026-07-21 --end 2026-07-23
+python main.py alpha_flow --kind dragon_tiger --start 2026-07-01 --end 2026-07-23
+python main.py alpha_flow --kind dragon_tiger_seat --start 2026-07-01 --end 2026-07-23
+python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
 python -m data_ingest.alpha_flow.selfcheck
 ```
 
@@ -59,7 +62,8 @@ python -m data_ingest.alpha_flow.selfcheck
 | `northbound` | `stock_hsgt_hist_em` | 北向/沪股通/深股通；金额转元 |
 | `stock_flow` | `stock_individual_fund_flow`（回退 `stock_hsgt_individual_em`） | 个股主力/北向增持 |
 | `margin` | `stock_margin_sse` + `stock_margin_detail_sse` | 市场汇总 + 标的明细 |
-| `dragon_tiger` | `stock_lhb_detail_em` | 按区间 |
+| `dragon_tiger` | `stock_lhb_detail_em` | 个股上榜明细（区间） |
+| `dragon_tiger_seat` | `stock_lhb_hyyyb_em` | 每日活跃营业部（买入/卖出金额、净额、关联股票） |
 | `block_trade` | `stock_dzjy_mrmx` | A股大宗明细 |
 
 说明：东财北向历史「净买额」约在 2024-08 后停更；请求近区间无有效值时会回退最近有效交易日，并在日志告警。

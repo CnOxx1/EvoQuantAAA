@@ -9,15 +9,23 @@ from __future__ import annotations
   python main.py core_ref --kind calendar --start 2026-07-01 --end 2026-07-31
   python main.py core_ref --p0 --start 2026-07-01 --end 2026-07-31 --source akshare
   python main.py core_market --p0 --start 2026-07-21 --end 2026-07-23 --symbol 600000 --symbol 000001
-  python main.py alpha_fundamental --p1 --universe HS300 --start 2026-07-01 --skip-existing --chunk-size 10
-  python main.py alpha_flow --p1 --start 2024-08-01 --end 2024-08-16 --universe HS300 --chunk-size 15
-  python main.py core_market --kind corp_action --universe HS300 --start 2020-01-01 --end 2026-07-23 --skip-existing
-  python main.py alpha_news_monitor --kind news_incremental
-  python main.py alpha_announcement --kind ann_incremental --source eastmoney
-  python main.py data_process --p0 --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
-  python main.py data_quality --scope CORE --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
   python main.py security_master --p0 --as-of 2026-07-23
-  python main.py backtest --strategy EW_HOLD --start 2026-07-01 --end 2026-07-23 --symbol 600000 --symbol 000001
+  python main.py core_market --p0 --universe TOP100 --start 2026-07-01 --end 2026-07-23 --skip-existing --chunk-size 10
+  python main.py alpha_fundamental --p1 --universe TOP100 --start 2026-07-01 --skip-existing --chunk-size 10
+  # 非龙头个股：按需单票拉取，勿对 ALL_LISTED 全市场灌数
+  python main.py core_market --kind equity_1d --start 2026-07-01 --end 2026-07-23 --symbol 600519
+  python main.py core_market --kind market_rank --start 2026-07-23 --end 2026-07-23 --top-n 100
+  python main.py core_market --kind market_rank --universe TOP100 --start 2026-07-01 --end 2026-07-23 --rank-type VOLUME --rank-type PCT_CHG_UP
+  python main.py core_market --kind abnormal_move --start 2026-07-23 --end 2026-07-23
+  python main.py alpha_flow --kind dragon_tiger --start 2026-07-01 --end 2026-07-23
+  python main.py alpha_flow --kind dragon_tiger_seat --start 2026-07-01 --end 2026-07-23
+  python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
+  python main.py core_market --kind suspend --start 2023-01-01 --end 2026-07-23 --chunk-months 1 --skip-existing
+  python main.py core_market --kind board_1d --start 2026-07-01 --end 2026-07-23 --board-type INDUSTRY
+  python main.py alpha_fundamental --kind valuation --universe TOP100 --start 2026-07-01 --end 2026-07-23 --chunk-size 10
+  python main.py alpha_fundamental --kind holder --universe TOP100 --chunk-size 10
+  python main.py core_ref --kind restricted_release --start 2026-07-01 --end 2026-07-23
+  python main.py daily --universe TOP100 --as-of 2026-07-23
 """
 
 import argparse
@@ -27,6 +35,8 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
+
+from security_master.models import UNIVERSE_CHOICES
 
 from shared.config import settings  # noqa: E402
 from shared.db import apply_migration_file  # noqa: E402
@@ -131,12 +141,25 @@ def cmd_security_master(args: argparse.Namespace) -> int:
 def cmd_data_quality(args: argparse.Namespace) -> int:
     from data_quality.models import DqRequest
     from data_quality.service import DataQualityService
+    from shared.ingest_batching import resolve_symbols_from_args
 
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
     indexes = [s.strip() for s in (args.index or []) if s.strip()]
     if args.scope != "CORE":
         print("status=invalid message=当前仅支持 --scope CORE")
         return 2
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.start,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
     try:
         result = DataQualityService().run_core(
             DqRequest(
@@ -269,8 +292,22 @@ def cmd_core_ref(args: argparse.Namespace) -> int:
     from data_ingest.core_ref.models import FetchRequest
     from data_ingest.core_ref.service import CoreRefIngestService
     from data_ingest.core_ref.sources import get_source
+    from shared.ingest_batching import resolve_symbols_from_args
 
     indexes = [s.strip() for s in (args.index or []) if s.strip()]
+    symbols = [s.strip() for s in (getattr(args, "symbol", None) or []) if s.strip()]
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=getattr(args, "universe", None),
+            symbols=symbols,
+            as_of=getattr(args, "universe_as_of", None) or args.start or args.end,
+            as_of_end=args.end,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    if getattr(args, "universe", None):
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
     try:
         source = get_source(args.source)
     except NotImplementedError as exc:
@@ -290,6 +327,7 @@ def cmd_core_ref(args: argparse.Namespace) -> int:
         exchange=args.exchange,
         industry_standard=args.industry_standard,
         index_symbols=indexes,
+        symbols=symbols,
         job_id=args.job_id,
     )
     try:
@@ -352,21 +390,38 @@ def cmd_core_market(args: argparse.Namespace) -> int:
         print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
 
     kind = args.kind or "equity_1d"
-    if args.skip_existing and args.start and args.end and symbols:
+    min_bars = max(1, int(getattr(args, "min_bars", None) or 1))
+    if (
+        args.skip_existing
+        and args.start
+        and args.end
+        and symbols
+        and kind != "market_rank"
+    ):
         before = len(symbols)
         if kind == "corp_action" and not args.p0:
             symbols = symbols_missing_corp_action(
-                symbols, start=args.start, end=args.end, min_rows=1
+                symbols, start=args.start, end=args.end, min_rows=min_bars
             )
-            print(f"skip_existing: keep {len(symbols)}/{before} missing corp_action")
+            print(
+                f"skip_existing: keep {len(symbols)}/{before} "
+                f"missing corp_action (min_bars={min_bars})"
+            )
         else:
             symbols = symbols_missing_equity_bars(
-                symbols, start=args.start, end=args.end, min_rows=1
+                symbols, start=args.start, end=args.end, min_rows=min_bars
             )
-            print(f"skip_existing: keep {len(symbols)}/{before} missing equity bars")
+            print(
+                f"skip_existing: keep {len(symbols)}/{before} "
+                f"missing equity bars (min_bars={min_bars})"
+            )
 
     source = get_source(args.source)
     service = CoreMarketIngestService(source=source)
+    rank_types = [t.strip().upper() for t in (args.rank_type or []) if t.strip()]
+    board_types = [t.strip().upper() for t in (getattr(args, "board_type", None) or []) if t.strip()]
+    board_names = [t.strip() for t in (getattr(args, "board_name", None) or []) if t.strip()]
+    chunk_months = int(getattr(args, "chunk_months", None) or 0)
     base = FetchRequest(
         kind=kind,  # type: ignore[arg-type]
         start=args.start,
@@ -374,6 +429,12 @@ def cmd_core_market(args: argparse.Namespace) -> int:
         symbols=symbols,
         index_symbols=indexes,
         job_id=args.job_id,
+        top_n=int(getattr(args, "top_n", None) or 100),
+        rank_types=rank_types,
+        prefer_spot=bool(getattr(args, "prefer_spot", False)),
+        change_types=[t.strip() for t in (args.change_type or []) if t.strip()],
+        board_types=board_types,
+        board_names=board_names,
     )
     chunking = should_chunk(
         symbols,
@@ -381,6 +442,7 @@ def cmd_core_market(args: argparse.Namespace) -> int:
         universe=args.universe,
         chunk_size=args.chunk_size,
     )
+    date_chunk_kinds = {"suspend", "limit", "market_rank", "abnormal_move", "board_1d"}
     try:
         if args.p0:
             if not (args.start and args.end):
@@ -393,7 +455,8 @@ def cmd_core_market(args: argparse.Namespace) -> int:
                 print("skip_existing: 无需补 equity/adj，仅刷新 suspend/limit/index")
                 base.symbols = []
                 results = []
-                for mk in ("suspend", "limit", "index_1d"):
+                cm = chunk_months or 1
+                for mk in ("suspend", "limit"):
                     req = FetchRequest(
                         kind=mk,  # type: ignore[arg-type]
                         start=args.start,
@@ -402,9 +465,31 @@ def cmd_core_market(args: argparse.Namespace) -> int:
                         index_symbols=indexes or ["000300"],
                         job_id=args.job_id,
                     )
-                    results.append(service.run(req))
+                    results.extend(
+                        service.run_range_kind_chunked(
+                            req,
+                            chunk_months=cm,
+                            skip_existing=True,
+                        )
+                    )
+                results.append(
+                    service.run(
+                        FetchRequest(
+                            kind="index_1d",
+                            start=args.start,
+                            end=args.end,
+                            symbols=[],
+                            index_symbols=indexes or ["000300"],
+                            job_id=args.job_id,
+                        )
+                    )
+                )
             elif chunking:
-                results = service.run_p0_chunked(base, chunk_size=args.chunk_size)
+                results = service.run_p0_chunked(
+                    base,
+                    chunk_size=args.chunk_size,
+                    chunk_months=chunk_months or 1,
+                )
             else:
                 results = service.run_p0(base)
             committed = sum(1 for r in results if r.status == "committed")
@@ -445,6 +530,25 @@ def cmd_core_market(args: argparse.Namespace) -> int:
                         print(f"message={r.message}")
                 print(f"summary committed_batches={committed}/{len(results)}")
                 return 0 if committed > 0 else 2
+        if kind in date_chunk_kinds and (chunk_months or args.skip_existing):
+            results = service.run_range_kind_chunked(
+                base,
+                chunk_months=chunk_months or 1,
+                skip_existing=bool(args.skip_existing),
+            )
+            if not results:
+                print("skip_existing: 无需补数，退出")
+                return 0
+            committed = sum(1 for r in results if r.status == "committed")
+            for r in results:
+                print(
+                    f"kind={r.kind} status={r.status} batch_id={r.batch_id} "
+                    f"fetched={r.fetched} inserted={r.inserted} updated={r.updated}"
+                )
+                if r.message:
+                    print(f"message={r.message}")
+            print(f"summary committed_batches={committed}/{len(results)}")
+            return 0 if committed > 0 else 2
         result = service.run(base)
     except ValueError as exc:
         print(f"status=invalid message={exc}")
@@ -457,6 +561,154 @@ def cmd_core_market(args: argparse.Namespace) -> int:
     if result.message:
         print(f"message={result.message}")
     return 0 if result.status == "committed" else 2
+
+
+def cmd_daily(args: argparse.Namespace) -> int:
+    """交易日增量：CORE 行情 + 排名/异动 → process → DQ（ALPHA 可选）。"""
+    from datetime import date
+
+    from data_ingest.core_market.models import FetchRequest as MktReq
+    from data_ingest.core_market.service import CoreMarketIngestService
+    from data_ingest.core_market.sources import get_source as get_mkt_source
+    from data_process.models import ProcessRequest
+    from data_process.service import DataProcessService
+    from data_quality.models import DqRequest
+    from data_quality.service import DataQualityService
+    from shared.db import get_conn
+    from shared.ingest_batching import resolve_symbols_from_args
+    from shared.universe_resolve import symbols_missing_equity_bars
+
+    as_of = (args.as_of or date.today().isoformat())[:10]
+    universe = args.universe or "TOP100"
+    indexes = [s.strip() for s in (args.index or []) if s.strip()] or ["000300"]
+
+    # 交易日守卫
+    with get_conn() as conn:
+        cal = conn.execute(
+            """
+            SELECT is_open FROM raw_trade_calendar
+            WHERE trade_date=? AND is_open=1
+            LIMIT 1
+            """,
+            (as_of,),
+        ).fetchone()
+    if not cal and not args.force:
+        print(f"status=skipped message={as_of} 非开市日（加 --force 强制）")
+        return 0
+
+    try:
+        sid, symbols = resolve_symbols_from_args(
+            universe=universe,
+            symbols=[],
+            as_of=as_of,
+        )
+    except ValueError as exc:
+        print(f"status=invalid message={exc}")
+        return 2
+    print(f"daily as_of={as_of} universe={universe} snapshot_id={sid} members={len(symbols)}")
+
+    mkt = CoreMarketIngestService(source=get_mkt_source("akshare"))
+    results = []
+    failed = 0
+
+    # equity/adj 增量
+    missing = symbols_missing_equity_bars(symbols, start=as_of, end=as_of, min_rows=1)
+    print(f"equity missing={len(missing)}/{len(symbols)}")
+    if missing:
+        for kind in ("equity_1d", "adj_factor"):
+            r = mkt.run(
+                MktReq(kind=kind, start=as_of, end=as_of, symbols=missing, job_id=args.job_id)  # type: ignore[arg-type]
+            )
+            results.append(r)
+            print(f"kind={r.kind} status={r.status} fetched={r.fetched}")
+            if r.status != "committed":
+                failed += 1
+
+    for kind in ("suspend", "limit", "index_1d", "market_rank", "abnormal_move"):
+        req = MktReq(
+            kind=kind,  # type: ignore[arg-type]
+            start=as_of,
+            end=as_of,
+            symbols=[],
+            index_symbols=indexes,
+            job_id=args.job_id,
+            prefer_spot=(kind == "market_rank"),
+            top_n=200,
+        )
+        r = mkt.run(req)
+        results.append(r)
+        print(f"kind={r.kind} status={r.status} fetched={r.fetched}")
+        if r.status != "committed":
+            failed += 1
+
+    if args.with_alpha:
+        from data_ingest.alpha_fundamental.models import FetchRequest as FundReq
+        from data_ingest.alpha_fundamental.service import FundamentalIngestService
+        from data_ingest.alpha_fundamental.sources import get_source as get_fund_source
+        from data_ingest.alpha_flow.models import FetchRequest as FlowReq
+        from data_ingest.alpha_flow.service import FlowIngestService
+        from data_ingest.alpha_flow.sources import get_source as get_flow_source
+
+        fund = FundamentalIngestService(source=get_fund_source("akshare"))
+        r = fund.run(
+            FundReq(kind="valuation", start=as_of, end=as_of, symbols=symbols, job_id=args.job_id)
+        )
+        results.append(r)
+        print(f"kind={r.kind} status={r.status} fetched={r.fetched}")
+        if r.status != "committed":
+            failed += 1
+        flow = FlowIngestService(source=get_flow_source("akshare"))
+        for kind in ("dragon_tiger", "dragon_tiger_seat", "block_trade"):
+            r = flow.run(
+                FlowReq(kind=kind, start=as_of, end=as_of, symbols=[], job_id=args.job_id)  # type: ignore[arg-type]
+            )
+            results.append(r)
+            print(f"kind={r.kind} status={r.status} fetched={r.fetched}")
+            if r.status != "committed":
+                failed += 1
+
+    # process + DQ
+    try:
+        proc_results = DataProcessService().run_p0(
+            ProcessRequest(
+                kind="equity_1d",
+                start=as_of,
+                end=as_of,
+                symbols=symbols,
+                index_symbols=indexes,
+                factor_type=args.factor_type,
+                job_id=args.job_id,
+            )
+        )
+        for pr in proc_results:
+            print(f"process kind={pr.kind} status={pr.status} output={pr.output_rows}")
+            if pr.status != "committed":
+                failed += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"process failed: {exc}")
+        failed += 1
+
+    try:
+        dq = DataQualityService().run_core(
+            DqRequest(
+                scope="CORE",
+                start=as_of,
+                end=as_of,
+                symbols=symbols,
+                index_symbols=indexes,
+                factor_type=args.factor_type,
+                job_id=args.job_id,
+            )
+        )
+        print(f"dq status={dq.status} error_fails={dq.error_fails}")
+        if dq.status != "passed":
+            failed += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"dq failed: {exc}")
+        failed += 1
+
+    print(f"summary daily as_of={as_of} failed_steps={failed}/{len(results)+2}")
+    return 0 if failed == 0 else 2
 
 
 def cmd_alpha_news_monitor(args: argparse.Namespace) -> int:
@@ -661,7 +913,7 @@ def cmd_alpha_fundamental(args: argparse.Namespace) -> int:
         if not args.kind:
             print("status=invalid message=请指定 --kind 或使用 --p1")
             return 2
-        if args.kind in {"statement", "indicator"}:
+        if args.kind in {"statement", "indicator", "valuation", "holder"}:
             if not symbols:
                 if getattr(args, "skip_existing", False):
                     print("skip_existing: 无需补数，退出")
@@ -740,6 +992,7 @@ def build_parser() -> argparse.ArgumentParser:
             "share_capital",
             "index_member",
             "special_treat",
+            "restricted_release",
         ],
     )
     p_ref.add_argument(
@@ -757,6 +1010,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ref.add_argument("--exchange", default="SSE")
     p_ref.add_argument("--industry-standard", default="SW2021")
     p_ref.add_argument("--index", action="append", default=[], help="指数代码，可重复")
+    p_ref.add_argument("--symbol", action="append", default=[], help="可选：解禁过滤标的")
+    p_ref.add_argument(
+        "--universe",
+        choices=list(UNIVERSE_CHOICES),
+        help="restricted_release：按 Universe 过滤",
+    )
+    p_ref.add_argument("--universe-as-of", help="Universe 点时日")
     p_ref.add_argument(
         "--share-sh-limit",
         type=int,
@@ -776,6 +1036,9 @@ def build_parser() -> argparse.ArgumentParser:
             "limit",
             "index_1d",
             "corp_action",
+            "market_rank",
+            "abnormal_move",
+            "board_1d",
         ],
     )
     p_mkt.add_argument(
@@ -793,7 +1056,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mkt.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
     p_mkt.add_argument(
         "--universe",
-        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        choices=list(UNIVERSE_CHOICES),
         help="从已提交 Universe 快照取标的（经库交接，不新建模块）",
     )
     p_mkt.add_argument(
@@ -807,9 +1070,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_mkt.add_argument("--chunk-size", type=int, default=15)
     p_mkt.add_argument(
+        "--chunk-months",
+        type=int,
+        default=0,
+        help="suspend/limit/market_rank/abnormal_move/board_1d：按 N 个月分块；0=不分块",
+    )
+    p_mkt.add_argument(
         "--skip-existing",
         action="store_true",
-        help="跳过已有数据：P0/equity 看 raw_equity_bar_1d；corp_action 看 raw_corp_action",
+        help="跳过已有数据：P0/equity 看 raw_equity_bar_1d；按日 kind 跳过已覆盖月份",
+    )
+    p_mkt.add_argument(
+        "--min-bars",
+        type=int,
+        default=1,
+        help="配合 --skip-existing：区间内行数 < min-bars 才补拉（长窗回填可设 500+）",
     )
     p_mkt.add_argument(
         "--index",
@@ -817,13 +1092,57 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="指数代码，可重复（默认 000300）",
     )
+    p_mkt.add_argument(
+        "--top-n",
+        type=int,
+        default=100,
+        help="market_rank：各榜保留前 N（默认 100）",
+    )
+    p_mkt.add_argument(
+        "--rank-type",
+        action="append",
+        default=[],
+        choices=[
+            "PCT_CHG_UP",
+            "PCT_CHG_DOWN",
+            "VOLUME",
+            "AMOUNT",
+            "TURNOVER",
+            "HOT",
+        ],
+        help="market_rank：榜单类型，可重复；默认全部",
+    )
+    p_mkt.add_argument(
+        "--prefer-spot",
+        action="store_true",
+        help="market_rank：--end/当日优先用 stock_zh_a_spot_em 全市场截面",
+    )
+    p_mkt.add_argument(
+        "--change-type",
+        action="append",
+        default=[],
+        help="abnormal_move：异动类型（如 火箭发射/大笔买入），可重复；默认全部",
+    )
+    p_mkt.add_argument(
+        "--board-type",
+        action="append",
+        default=[],
+        choices=["INDUSTRY", "CONCEPT"],
+        help="board_1d：板块类型，可重复；默认 INDUSTRY",
+    )
+    p_mkt.add_argument(
+        "--board-name",
+        action="append",
+        default=[],
+        help="board_1d：板块名称过滤，可重复；默认全行业/全概念",
+    )
     p_mkt.add_argument("--job-id", default=None)
     p_mkt.set_defaults(func=cmd_core_market)
 
     p_fund = sub.add_parser("alpha_fundamental", help="运行 ALPHA 基本面获取模块")
     p_fund.add_argument(
         "--kind",
-        choices=["statement", "indicator", "consensus"],
+        choices=["statement", "indicator", "consensus", "valuation", "holder"],
     )
     p_fund.add_argument(
         "--p1",
@@ -840,7 +1159,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fund.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
     p_fund.add_argument(
         "--universe",
-        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        choices=list(UNIVERSE_CHOICES),
         help="从 Universe 快照取标的；可与 --symbol 求交",
     )
     p_fund.add_argument(
@@ -876,6 +1195,7 @@ def build_parser() -> argparse.ArgumentParser:
             "stock_flow",
             "margin",
             "dragon_tiger",
+            "dragon_tiger_seat",
             "block_trade",
         ],
     )
@@ -894,7 +1214,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_flow.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
     p_flow.add_argument(
         "--universe",
-        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        choices=list(UNIVERSE_CHOICES),
         help="从 Universe 快照取标的（stock_flow/p1 需要）",
     )
     p_flow.add_argument(
@@ -940,7 +1260,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_proc.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
     p_proc.add_argument(
         "--universe",
-        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        choices=list(UNIVERSE_CHOICES),
         help="从 Universe 快照取标的",
     )
     p_proc.add_argument("--universe-as-of", help="Universe 点时日，默认 --start")
@@ -960,21 +1280,52 @@ def build_parser() -> argparse.ArgumentParser:
     p_dq.add_argument("--start", required=True, help="YYYY-MM-DD")
     p_dq.add_argument("--end", required=True, help="YYYY-MM-DD")
     p_dq.add_argument("--symbol", action="append", default=[], help="股票代码，可重复")
+    p_dq.add_argument(
+        "--universe",
+        choices=list(UNIVERSE_CHOICES),
+        help="从 Universe 快照取标的",
+    )
+    p_dq.add_argument("--universe-as-of", help="Universe 点时日，默认 --start")
     p_dq.add_argument("--index", action="append", default=[], help="指数代码，可重复")
     p_dq.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
     p_dq.add_argument("--job-id", default=None)
     p_dq.set_defaults(func=cmd_data_quality)
 
+    p_daily = sub.add_parser(
+        "daily",
+        help="交易日增量：equity/adj→suspend/limit/index→rank/异动→process→DQ",
+    )
+    p_daily.add_argument("--as-of", help="YYYY-MM-DD，默认今天")
+    p_daily.add_argument(
+        "--universe",
+        default="TOP100",
+        choices=list(UNIVERSE_CHOICES),
+    )
+    p_daily.add_argument("--index", action="append", default=[], help="默认 000300")
+    p_daily.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
+    p_daily.add_argument(
+        "--with-alpha",
+        action="store_true",
+        help="额外拉 valuation + 龙虎榜/席位/大宗",
+    )
+    p_daily.add_argument(
+        "--force",
+        action="store_true",
+        help="非开市日也强制执行",
+    )
+    p_daily.add_argument("--job-id", default=None)
+    p_daily.set_defaults(func=cmd_daily)
+
     p_sm = sub.add_parser("security_master", help="生成 Universe 日快照")
     p_sm.add_argument(
         "--universe",
-        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        choices=list(UNIVERSE_CHOICES),
         help="单一宇宙；与 --p0 二选一",
     )
     p_sm.add_argument(
         "--p0",
         action="store_true",
-        help="按序生成 ALL_LISTED → HS300 → HS300_EX_ST",
+        help="按序生成 TOP100 → SECTOR_LEADERS（本地只沉淀龙头，不全市场灌数）",
     )
     p_sm.add_argument("--as-of", required=True, help="YYYY-MM-DD 点时日")
     p_sm.add_argument("--industry-standard", default="SW2021")
@@ -996,7 +1347,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument(
         "--universe",
         default=None,
-        choices=["ALL_LISTED", "HS300", "HS300_EX_ST"],
+        choices=list(UNIVERSE_CHOICES),
         help="从 Universe 快照取标的（无 --symbol 时使用，默认不强制）",
     )
     p_bt.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])

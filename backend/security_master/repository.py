@@ -130,6 +130,51 @@ class SecurityMasterRepository:
                 active[sym] = r
         return active
 
+    def load_share_capital_map(self, *, as_of: str) -> dict[str, dict[str, Any]]:
+        """点时最新股本（effective_date <= as_of）。"""
+        with get_conn() as conn:
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT symbol, total_shares, float_shares, effective_date, source
+                    FROM raw_share_capital
+                    WHERE effective_date <= ?
+                    ORDER BY symbol, effective_date DESC
+                    """,
+                    (as_of,),
+                ).fetchall()
+            ]
+        best: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            sym = str(r["symbol"])
+            if sym not in best:
+                best[sym] = r
+        return best
+
+    def load_latest_close_map(self, *, as_of: str) -> dict[str, float]:
+        """
+        仅用库内已有日线收盘（不触发拉取）。
+        若无行情则返回空 dict，排名回退到股本本身。
+        """
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ON (symbol) symbol, close
+                FROM raw_equity_bar_1d
+                WHERE trade_date <= ? AND close IS NOT NULL AND close > 0
+                ORDER BY symbol, trade_date DESC
+                """,
+                (as_of,),
+            ).fetchall()
+        out: dict[str, float] = {}
+        for r in rows:
+            try:
+                out[str(r["symbol"])] = float(r["close"])
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def load_index_members(
         self, *, index_symbol: str, as_of: str, preferred_source: str
     ) -> list[dict[str, Any]]:

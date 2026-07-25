@@ -11,7 +11,16 @@
 
 
 ## 本目录模块一览
-无子模块；本目录即共享库实现。
+
+| 文件 | 作用 |
+| --- | --- |
+| `db.py` | SQLAlchemy 连接；`?` → 命名绑定；`executemany` |
+| `config.py` / `pg_local.py` | 配置与本地 pgembed |
+| `logging_utils.py` | 日志 |
+| `universe_resolve.py` | 从已提交 Universe 快照解析标的（只读库） |
+| `ingest_batching.py` | `chunk_symbols` / `chunk_date_ranges` / `missing_date_ranges` / Universe 参数解析 |
+| `bulk_upsert.py` | 通用分块 UPSERT（大包 executemany，小包 EXISTS 统计） |
+| `akshare_call.py` | Akshare/HTTP 统一重试、退避、失败降噪 |
 
 ## 协作模块索引（供 AI Agent）
 
@@ -19,16 +28,16 @@
 | --- | --- | --- | --- |
 | backend（父） | `../README.md` | 模块总览 | 父目录 |
 | database | `../../database/README.md` | 契约 | 类型可对齐契约 |
-| 各业务模块 | `../README.md` | 消费者 | 可引用本库；本库不得反依赖 |
+| data_ingest | `../data_ingest/README.md` | 主要消费者 | 可引用；本库不得反依赖 |
 
 ## 数据库
 - 引擎：**PostgreSQL**（SQLAlchemy + psycopg）
 - 默认：嵌入式 `pgembed` → `data/pgdata`，库 `ashare`
 - 覆盖：`ASHARE_DATABASE_URL=postgresql+psycopg://...`
-- 仓库代码仍可用 `?` 占位符，由 `shared.db` 转换为绑定参数
+- 仓库代码仍可用 `?` 占位符，由 `shared.db` 转换为绑定参数；批量写用 `ConnectionProxy.executemany`
 
 ## 边界
-- 做：日志、配置读取、DB 连接辅助、ID 工具、通用错误类型。
+- 做：日志、配置、DB 辅助、Universe 解析、ingest 分块/批量写入、HTTP 重试。
 - 不做：依赖任何业务模块；实现 DAG 调度；隐藏跨模块传 DataFrame。
 
 ## 输入

@@ -98,6 +98,7 @@ class AkshareFlowSource(FlowSource):
     - stock_flow   → stock_individual_fund_flow（回退 hsgt 个股增持）
     - margin       → SSE/SZSE 市场汇总 + 明细（stock_margin_*_sse / *_szse）
     - dragon_tiger → stock_lhb_detail_em
+    - dragon_tiger_seat → stock_lhb_hyyyb_em（每日活跃营业部）
     - block_trade  → stock_dzjy_mrmx
     """
 
@@ -114,6 +115,7 @@ class AkshareFlowSource(FlowSource):
             "stock_flow": self._stock_flow,
             "margin": self._margin,
             "dragon_tiger": self._dragon,
+            "dragon_tiger_seat": self._dragon_seat,
             "block_trade": self._block,
         }
         if request.kind not in dispatch:
@@ -138,17 +140,16 @@ class AkshareFlowSource(FlowSource):
         return day is not None and start <= day <= end
 
     def _call_with_retry(self, fn: Any, **kwargs: Any) -> Any:
-        last: Exception | None = None
-        for i in range(self.retries + 1):
-            try:
-                self._pause()
-                return fn(**kwargs)
-            except Exception as exc:  # noqa: BLE001
-                last = exc
-                logger.warning("retry %s/%s %s: %s", i + 1, self.retries + 1, fn.__name__, exc)
-                time.sleep(0.5 * (i + 1))
-        assert last is not None
-        raise last
+        from shared.akshare_call import call_with_retry
+
+        label = getattr(fn, "__name__", "akshare_call")
+        return call_with_retry(
+            lambda: fn(**kwargs),
+            label=label,
+            attempts=self.retries + 1,
+            pause=self.request_pause,
+            backoff=0.5,
+        )
 
     def _northbound(self, ak: Any, request: FetchRequest) -> list[dict]:
         start, end = self._require_range(request)
@@ -565,6 +566,59 @@ class AkshareFlowSource(FlowSource):
                     "net_amount": _finite(as_float(r[c_net])) if c_net else None,
                     "buy_amount": _finite(as_float(r[c_buy])) if c_buy else None,
                     "sell_amount": _finite(as_float(r[c_sell])) if c_sell else None,
+                    "source_event_id": event_id[:240],
+                    "source": self.source,
+                }
+            )
+        return rows
+
+    def _dragon_seat(self, ak: Any, request: FetchRequest) -> list[dict]:
+        """龙虎榜每日活跃营业部（席位级净买）。"""
+        start, end = self._require_range(request)
+        try:
+            df = self._call_with_retry(
+                ak.stock_lhb_hyyyb_em,
+                start_date=_ymd(start),
+                end_date=_ymd(end),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"dragon_tiger_seat 拉取失败: {exc}") from exc
+        if df is None or getattr(df, "empty", True):
+            return []
+        c_seat = col_by_keywords(df.columns, ("营业部名称", "营业部"))
+        c_code = col_by_keywords(df.columns, ("营业部代码",))
+        c_date = col_by_keywords(df.columns, ("上榜日", "日期"))
+        c_buy_n = col_by_keywords(df.columns, ("买入个股数",))
+        c_sell_n = col_by_keywords(df.columns, ("卖出个股数",))
+        c_buy = col_by_keywords(df.columns, ("买入总金额",))
+        c_sell = col_by_keywords(df.columns, ("卖出总金额",))
+        c_net = col_by_keywords(df.columns, ("总买卖净额", "净额"))
+        c_stocks = col_by_keywords(df.columns, ("买入股票",))
+        rows: list[dict] = []
+        for i, r in df.iterrows():
+            seat = as_str(r[c_seat]) if c_seat is not None else ""
+            if not seat:
+                continue
+            day = _parse_day(as_str(r[c_date])) if c_date is not None else None
+            if day is None:
+                continue
+            seat_code = as_str(r[c_code]) if c_code is not None else ""
+            event_id = f"{day.isoformat()}|{seat_code or seat}|{i}"
+            buy_n = as_float(r[c_buy_n]) if c_buy_n is not None else None
+            sell_n = as_float(r[c_sell_n]) if c_sell_n is not None else None
+            rows.append(
+                {
+                    "trade_date": day.isoformat(),
+                    "seat_name": seat,
+                    "seat_code": seat_code or None,
+                    "buy_count": int(buy_n) if buy_n is not None else None,
+                    "sell_count": int(sell_n) if sell_n is not None else None,
+                    "buy_amount": _finite(as_float(r[c_buy])) if c_buy else None,
+                    "sell_amount": _finite(as_float(r[c_sell])) if c_sell else None,
+                    "net_amount": _finite(as_float(r[c_net])) if c_net else None,
+                    "related_stocks": (
+                        as_str(r[c_stocks]) if c_stocks is not None else None
+                    ),
                     "source_event_id": event_id[:240],
                     "source": self.source,
                 }

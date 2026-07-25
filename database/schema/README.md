@@ -53,6 +53,15 @@
 | raw_suspend / raw_limit_board | market_data | data_ingest/core_market (suspend/limit) | data_process, backtest | (symbol, trade_date, event_type, source) | CORE |
 | raw_index_bar_1d | market_data | data_ingest/core_market (index_1d) | data_process, backtest | (index_symbol, trade_date, source) | CORE；基准 |
 | raw_corp_action | ref_data | data_ingest/core_market (corp_action) | data_process | 事件幂等键 + batch_id | P1 |
+| raw_market_rank_1d | market_data | data_ingest/core_market (market_rank) | research_lab / 选股筛选 | (trade_date, rank_type, symbol, source) | P1 |
+| raw_abnormal_move | market_data | data_ingest/core_market (abnormal_move) | research_lab / 短线事件 | (trade_date, change_type, symbol, source_event_id, source) | P1 |
+| raw_board_bar_1d | market_data | data_ingest/core_market (board_1d) | research_lab / 行业轮动 | (board_type, board_name, trade_date, source) | P1 |
+| raw_valuation_1d | market_data | data_ingest/alpha_fundamental (valuation) | research_lab / 估值因子 | (symbol, trade_date, source) | P1 |
+| raw_holder_count | market_data | data_ingest/alpha_fundamental (holder) | research_lab / 筹码 | (symbol, asof_date, source) | P2 |
+| raw_restricted_release | ref_data | data_ingest/core_ref (restricted_release) | risk_engine / research_lab | (symbol, release_date, source_event_id, source) | P1 |
+| raw_dragon_tiger | market_data | data_ingest/alpha_flow (dragon_tiger) | research_lab / 情绪 | (symbol, trade_date, source_event_id, source) | P2 |
+| raw_dragon_tiger_seat | market_data | data_ingest/alpha_flow (dragon_tiger_seat) | research_lab / 席位追踪 | (trade_date, seat_name, source_event_id, source) | P2 |
+| raw_block_trade | market_data | data_ingest/alpha_flow (block_trade) | research_lab / 折溢价 | (symbol, trade_date, source_event_id, source) | P2 |
 | raw_equity_bar_1m | market_data | data_ingest/core_market (equity_1m) | data_process | (symbol, bar_time, source) | P2 |
 | raw_fund_statement / raw_fund_indicator | market_data | data_ingest/alpha_fundamental (statement/indicator) | data_process, research_lab | 披露幂等键 + batch_id | ALPHA P1 |
 | raw_consensus_estimate | market_data | data_ingest/alpha_fundamental (consensus) | data_process, research_lab | (symbol, asof_date, metric, period_year, source, version) | ALPHA P2；须 PIT |

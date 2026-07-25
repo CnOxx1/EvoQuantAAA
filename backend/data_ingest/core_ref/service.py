@@ -38,6 +38,8 @@ class CoreRefIngestService:
             raise ValueError(f"非法 ingest_kind: {request.kind}; 允许: {VALID_KINDS}")
         if request.kind == "calendar" and not (request.start and request.end):
             raise ValueError("calendar 必须提供 --start 与 --end")
+        if request.kind == "restricted_release" and not (request.start and request.end):
+            raise ValueError("restricted_release 必须提供 --start 与 --end")
         if request.kind == "index_member" and not request.index_symbols:
             # 允许默认指数，由 mock 填 000300；真实源应强制
             request.index_symbols = ["000300"]
@@ -52,6 +54,7 @@ class CoreRefIngestService:
                 "exchange": request.exchange,
                 "industry_standard": request.industry_standard,
                 "index_symbols": request.index_symbols,
+                "symbols": request.symbols,
                 "start": request.start,
                 "end": request.end,
             },

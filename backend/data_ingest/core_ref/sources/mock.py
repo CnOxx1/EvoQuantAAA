@@ -33,6 +33,8 @@ class MockCoreRefSource(CoreRefSource):
             return FetchBundle("index_member", self._index_member(request), src)
         if request.kind == "special_treat":
             return FetchBundle("special_treat", self._special_treat(), src)
+        if request.kind == "restricted_release":
+            return FetchBundle("restricted_release", self._restricted_release(request), src)
         raise ValueError(f"unsupported kind: {request.kind}")
 
     def _calendar(self, request: FetchRequest) -> list[dict]:
@@ -144,3 +146,28 @@ class MockCoreRefSource(CoreRefSource):
                 "source": self.source,
             }
         ]
+
+    def _restricted_release(self, request: FetchRequest) -> list[dict]:
+        day = (request.end or request.start or "2026-07-23")[:10]
+        symbols = list(request.symbols) or ["600000", "000001"]
+        rows = []
+        for symbol in symbols:
+            event_id = f"{symbol}|{day}|定向增发|1000000"
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": f"MOCK-{symbol}",
+                    "release_date": day,
+                    "share_type": "定向增发",
+                    "release_shares": 1_000_000.0,
+                    "actual_shares": 1_000_000.0,
+                    "actual_mv": 1e8,
+                    "float_ratio": 0.02,
+                    "pre_close": 10.0,
+                    "pct_chg_b20": 1.0,
+                    "pct_chg_a20": -0.5,
+                    "source_event_id": event_id,
+                    "source": self.source,
+                }
+            )
+        return rows

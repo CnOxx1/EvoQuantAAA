@@ -11,7 +11,17 @@
 
 
 ## 本目录模块一览
-无子模块；存放版本化迁移文件（命名规范待工具选定后固定）。
+
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`013`。
+
+| 文件 | 要点 |
+| --- | --- |
+| `001`–`010` | 公告、core_ref、core_market、fundamental、flow、news、process、DQ、security_master、backtest |
+| `011_market_rank.sql` | `raw_market_rank_1d` |
+| `012_market_microstructure.sql` | `raw_abnormal_move`、`raw_dragon_tiger_seat` |
+| `013_ingest_enhancements.sql` | `raw_valuation_1d`、`raw_board_bar_1d`、`raw_restricted_release`、`raw_holder_count` |
+
+应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 
 ## 协作模块索引（供 AI Agent）
 

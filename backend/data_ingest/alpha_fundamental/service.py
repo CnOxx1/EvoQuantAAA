@@ -18,7 +18,7 @@ from shared.ingest_batching import chunk_symbols
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "alpha_fundamental"
-_SYMBOL_KINDS = frozenset({"statement", "indicator"})
+_SYMBOL_KINDS = frozenset({"statement", "indicator", "valuation", "holder"})
 
 
 @dataclass
@@ -43,8 +43,10 @@ class FundamentalIngestService:
     def run(self, request: FetchRequest) -> IngestResult:
         if request.kind not in VALID_KINDS:
             raise ValueError(f"非法 ingest_kind: {request.kind}; 允许: {VALID_KINDS}")
-        if request.kind in {"statement", "indicator"} and not request.symbols:
+        if request.kind in _SYMBOL_KINDS and not request.symbols:
             raise ValueError(f"{request.kind} 必须提供 --symbol")
+        if request.kind == "valuation" and not (request.start and request.end):
+            raise ValueError("valuation 必须提供 --start 与 --end")
         # consensus 允许不传 symbol（全市场快照）；传了则过滤
 
         batch = self.batches.create(
@@ -99,7 +101,7 @@ class FundamentalIngestService:
         *,
         chunk_size: int = 15,
     ) -> list[IngestResult]:
-        """statement/indicator 按标的分块；单 chunk 失败不中断。"""
+        """statement/indicator/valuation/holder 按标的分块；单 chunk 失败不中断。"""
         if request_base.kind not in _SYMBOL_KINDS:
             raise ValueError(f"{request_base.kind} 不支持按标的分块（可用单次 run）")
         results: list[IngestResult] = []

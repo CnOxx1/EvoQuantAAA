@@ -35,6 +35,7 @@ def main() -> int:
             "raw_limit_board",
             "raw_index_bar_1d",
             "raw_corp_action",
+            "raw_market_rank_1d",
         ):
             conn.execute(f"DELETE FROM {t} WHERE source='mock'")
         conn.execute("DELETE FROM ingest_batch WHERE ingest_module='core_market'")
@@ -67,9 +68,24 @@ def main() -> int:
     )
     assert r2.updated == 6 and r2.inserted == 0, r2
 
+    r_rank = svc.run(
+        FetchRequest(
+            kind="market_rank",
+            start="2026-07-21",
+            end="2026-07-23",
+            symbols=["600000", "000001"],
+            top_n=2,
+            rank_types=["PCT_CHG_UP", "VOLUME"],
+        )
+    )
+    assert r_rank.status == "committed", r_rank
+    # 3 交易日 × 2 标的 × 2 榜
+    assert r_rank.fetched == 12, r_rank
+
     counts = CoreMarketRepository().counts()
     assert counts["raw_equity_bar_1d"] >= 6
     assert counts["raw_adj_factor"] >= 12
+    assert counts["raw_market_rank_1d"] >= 12
     print("selfcheck OK:", counts)
     return 0
 

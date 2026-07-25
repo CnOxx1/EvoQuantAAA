@@ -8,6 +8,7 @@ IngestKind = Literal[
     "stock_flow",
     "margin",
     "dragon_tiger",
+    "dragon_tiger_seat",
     "block_trade",
 ]
 
@@ -16,6 +17,7 @@ VALID_KINDS: tuple[str, ...] = (
     "stock_flow",
     "margin",
     "dragon_tiger",
+    "dragon_tiger_seat",
     "block_trade",
 )
 

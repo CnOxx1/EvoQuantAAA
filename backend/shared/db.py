@@ -61,6 +61,14 @@ class ConnectionProxy:
         result = self._conn.execute(text(converted), binds)
         return ResultProxy(result)
 
+    def executemany(self, sql: str, params_seq: list[tuple[Any, ...]]) -> None:
+        """批量执行同形 SQL（SQLAlchemy executemany）。"""
+        if not params_seq:
+            return
+        converted, _ = _qmark_to_binds(sql, tuple(params_seq[0]))
+        binds_list = [_qmark_to_binds(sql, tuple(p))[1] for p in params_seq]
+        self._conn.execute(text(converted), binds_list)
+
 
 def _qmark_to_binds(sql: str, params: tuple[Any, ...]) -> tuple[str, dict[str, Any]]:
     binds: dict[str, Any] = {}

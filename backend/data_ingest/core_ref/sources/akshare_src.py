@@ -61,6 +61,7 @@ class AkshareCoreRefSource(CoreRefSource):
             "share_capital": lambda _ak, _req: self._share_capital(_ak),
             "index_member": self._index_member,
             "special_treat": lambda _ak, _req: self._special_treat(_ak),
+            "restricted_release": self._restricted_release,
         }
         if request.kind not in dispatch:
             raise ValueError(f"unsupported kind: {request.kind}")
@@ -71,6 +72,13 @@ class AkshareCoreRefSource(CoreRefSource):
     def _pause(self) -> None:
         if self.request_pause > 0:
             time.sleep(self.request_pause)
+
+    def _call(self, fn: Any, *, label: str) -> Any:
+        from shared.akshare_call import call_with_retry
+
+        return call_with_retry(
+            fn, label=label, attempts=3, pause=self.request_pause, backoff=0.6
+        )
 
     def _calendar(self, ak: Any, request: FetchRequest) -> list[dict]:
         start = date.fromisoformat(request.start or "")
@@ -573,3 +581,137 @@ class AkshareCoreRefSource(CoreRefSource):
         if not rows:
             raise RuntimeError("special_treat 未识别到 ST 标的")
         return rows
+
+    def _restricted_release(self, ak: Any, request: FetchRequest) -> list[dict]:
+        """限售解禁：区间用 detail_em；有 symbols 时再按票 queue 补齐并过滤。"""
+        if not (request.start and request.end):
+            raise ValueError("restricted_release 必须提供 --start 与 --end")
+        start, end = request.start[:10], request.end[:10]
+        start_ymd, end_ymd = start.replace("-", ""), end.replace("-", "")
+        symbol_filter = {
+            as_str(s).split(".")[0][-6:]
+            for s in (request.symbols or [])
+            if as_str(s)
+        }
+        rows: list[dict] = []
+        seen: set[str] = set()
+
+        def _append_row(
+            *,
+            symbol: str,
+            name: str | None,
+            release_date: str,
+            share_type: str | None,
+            release_shares: float | None,
+            actual_shares: float | None,
+            actual_mv: float | None,
+            float_ratio: float | None,
+            pre_close: float | None,
+            pct_b20: float | None,
+            pct_a20: float | None,
+        ) -> None:
+            if not symbol or not release_date:
+                return
+            if symbol_filter and symbol not in symbol_filter:
+                return
+            if release_date < start or release_date > end:
+                return
+            event_id = f"{symbol}|{release_date}|{share_type or ''}|{release_shares or ''}"
+            if event_id in seen:
+                return
+            seen.add(event_id)
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "release_date": release_date,
+                    "share_type": share_type,
+                    "release_shares": release_shares,
+                    "actual_shares": actual_shares,
+                    "actual_mv": actual_mv,
+                    "float_ratio": float_ratio,
+                    "pre_close": pre_close,
+                    "pct_chg_b20": pct_b20,
+                    "pct_chg_a20": pct_a20,
+                    "source_event_id": event_id[:240],
+                    "source": self.source,
+                }
+            )
+
+        try:
+            df = self._call(
+                lambda: ak.stock_restricted_release_detail_em(
+                    start_date=start_ymd, end_date=end_ymd
+                ),
+                label="restricted_release_detail",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("restricted_release detail 失败: %s", exc)
+            df = None
+        if df is not None and not getattr(df, "empty", True):
+            c_code = col_by_keywords(df.columns, ("股票代码", "代码"))
+            c_name = col_by_keywords(df.columns, ("股票简称", "简称", "名称"))
+            c_date = col_by_keywords(df.columns, ("解禁时间", "解禁日期"))
+            c_type = col_by_keywords(df.columns, ("限售股类型", "类型"))
+            c_shares = col_by_keywords(df.columns, ("解禁数量",))
+            c_actual = col_by_keywords(df.columns, ("实际解禁数量",))
+            c_mv = col_by_keywords(df.columns, ("实际解禁市值", "实际解禁数量市值"))
+            c_ratio = col_by_keywords(df.columns, ("占解禁前流通市值比例", "占流通市值比例"))
+            c_close = col_by_keywords(df.columns, ("解禁前一交易日收盘价",))
+            c_b20 = col_by_keywords(df.columns, ("解禁前20日涨跌幅",))
+            c_a20 = col_by_keywords(df.columns, ("解禁后20日涨跌幅",))
+            for _, r in df.iterrows():
+                symbol = as_str(r[c_code]) if c_code is not None else ""
+                rd = as_str(r[c_date])[:10] if c_date is not None else ""
+                _append_row(
+                    symbol=symbol,
+                    name=as_str(r[c_name]) if c_name is not None else None,
+                    release_date=rd,
+                    share_type=as_str(r[c_type]) if c_type is not None else None,
+                    release_shares=as_float(r[c_shares]) if c_shares is not None else None,
+                    actual_shares=as_float(r[c_actual]) if c_actual is not None else None,
+                    actual_mv=as_float(r[c_mv]) if c_mv is not None else None,
+                    float_ratio=as_float(r[c_ratio]) if c_ratio is not None else None,
+                    pre_close=as_float(r[c_close]) if c_close is not None else None,
+                    pct_b20=as_float(r[c_b20]) if c_b20 is not None else None,
+                    pct_a20=as_float(r[c_a20]) if c_a20 is not None else None,
+                )
+
+        # 有显式 symbols 时按票 queue 补漏（detail 分页偶发不全）
+        for symbol in sorted(symbol_filter):
+            try:
+                qdf = self._call(
+                    lambda s=symbol: ak.stock_restricted_release_queue_em(symbol=s),
+                    label=f"restricted_release_queue:{symbol}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("restricted_release queue %s 失败: %s", symbol, exc)
+                continue
+            if qdf is None or getattr(qdf, "empty", True):
+                continue
+            c_date = col_by_keywords(qdf.columns, ("解禁时间", "解禁日期"))
+            c_type = col_by_keywords(qdf.columns, ("限售股类型", "类型"))
+            c_shares = col_by_keywords(qdf.columns, ("解禁数量",))
+            c_actual = col_by_keywords(qdf.columns, ("实际解禁数量",))
+            c_mv = col_by_keywords(qdf.columns, ("实际解禁数量市值", "实际解禁市值"))
+            c_ratio = col_by_keywords(qdf.columns, ("占流通市值比例",))
+            c_close = col_by_keywords(qdf.columns, ("解禁前一交易日收盘价",))
+            c_b20 = col_by_keywords(qdf.columns, ("解禁前20日涨跌幅",))
+            c_a20 = col_by_keywords(qdf.columns, ("解禁后20日涨跌幅",))
+            for _, r in qdf.iterrows():
+                rd = as_str(r[c_date])[:10] if c_date is not None else ""
+                _append_row(
+                    symbol=symbol,
+                    name=None,
+                    release_date=rd,
+                    share_type=as_str(r[c_type]) if c_type is not None else None,
+                    release_shares=as_float(r[c_shares]) if c_shares is not None else None,
+                    actual_shares=as_float(r[c_actual]) if c_actual is not None else None,
+                    actual_mv=as_float(r[c_mv]) if c_mv is not None else None,
+                    float_ratio=as_float(r[c_ratio]) if c_ratio is not None else None,
+                    pre_close=as_float(r[c_close]) if c_close is not None else None,
+                    pct_b20=as_float(r[c_b20]) if c_b20 is not None else None,
+                    pct_a20=as_float(r[c_a20]) if c_a20 is not None else None,
+                )
+        return rows
+
