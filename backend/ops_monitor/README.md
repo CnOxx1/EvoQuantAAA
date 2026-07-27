@@ -17,7 +17,7 @@
 | 入口 | 说明 |
 | --- | --- |
 | `notify.py::notify_round` | 汇总失败 → 写 `ops_alert` → 打印摘要；`ASHARE_ALERT_WEBHOOK` 有值则 POST JSON |
-| `coverage.py` / `main.py coverage` | 核心表 × 月份行数与缺口月 |
+| `coverage.py` / `main.py coverage` | 核心表×月份：equity/adj/suspend/limit/index/valuation/money_flow/news/tech_1d/equity_min |
 
 ## 运行
 

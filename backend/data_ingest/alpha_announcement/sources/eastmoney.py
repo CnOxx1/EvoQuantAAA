@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
@@ -10,7 +10,7 @@ from data_ingest.alpha_announcement.category import (
 )
 from data_ingest.alpha_announcement.models import AnnouncementRecord, FetchRequest
 from data_ingest.alpha_announcement.sources.base import AnnouncementSource, FetchResult
-from data_ingest.alpha_announcement.timeutil import normalize_publish_time
+from shared.timeutil import normalize_publish_time
 
 logger = logging.getLogger(__name__)
 

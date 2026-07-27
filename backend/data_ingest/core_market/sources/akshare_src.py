@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -14,7 +14,8 @@ from data_ingest.core_market.models import (
     FetchRequest,
 )
 from data_ingest.core_market.sources.base import CoreMarketSource
-from data_ingest.core_ref.sources._parse import as_float, as_str, col_by_keywords
+from data_ingest.ingest_common.parse import as_float, as_str, col_by_keywords
+from shared.akshare_call import call_with_retry
 from shared.db import get_conn
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,22 @@ def _require_akshare():
 
 def _ymd(d: date) -> str:
     return d.strftime("%Y%m%d")
+
+
+def _normalize_bar_time(value: Any) -> str | None:
+    """统一为 YYYY-MM-DD HH:MM:SS。"""
+    if value is None:
+        return None
+    s = str(value).strip().replace("/", "-").replace("T", " ")
+    if not s:
+        return None
+    if len(s) == 16 and s[10] == " ":  # YYYY-MM-DD HH:MM
+        s = s + ":00"
+    if len(s) >= 19:
+        return s[:19]
+    if len(s) == 10:
+        return s + " 00:00:00"
+    return s
 
 
 def _parse_day(text: str) -> date:
@@ -107,6 +124,8 @@ class AkshareCoreMarketSource(CoreMarketSource):
             "market_rank": self._market_rank,
             "abnormal_move": self._abnormal_move,
             "board_1d": self._board_1d,
+            "equity_15m": self._equity_15m,
+            "equity_60m": self._equity_60m,
         }
         if request.kind not in dispatch:
             raise ValueError(f"unsupported kind: {request.kind}")
@@ -142,6 +161,97 @@ class AkshareCoreMarketSource(CoreMarketSource):
         if not rows:
             raise RuntimeError("equity_1d 未拉到任何 K 线")
         return rows
+
+    def _equity_15m(self, ak: Any, request: FetchRequest) -> list[dict]:
+        return self._equity_min(ak, request, period="15", freq="15m")
+
+    def _equity_60m(self, ak: Any, request: FetchRequest) -> list[dict]:
+        return self._equity_min(ak, request, period="60", freq="60m")
+
+    def _equity_min(
+        self, ak: Any, request: FetchRequest, *, period: str, freq: str
+    ) -> list[dict]:
+        """东财 hist_min_em 优先；失败回退新浪 minute（窗口更短）。"""
+        start, end = self._require_range(request)
+        symbols = self._require_symbols(request)
+        start_dt = f"{start} 09:30:00"
+        end_dt = f"{end} 15:00:00"
+        rows: list[dict] = []
+        for symbol in symbols:
+            df = None
+            try:
+                df = call_with_retry(
+                    lambda s=symbol: ak.stock_zh_a_hist_min_em(
+                        symbol=s,
+                        start_date=start_dt,
+                        end_date=end_dt,
+                        period=period,
+                        adjust="",
+                    ),
+                    label=f"hist_min_em:{freq}:{symbol}",
+                    attempts=3,
+                    pause=self.request_pause,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("hist_min_em %s %s 失败: %s", freq, symbol, exc)
+            if df is None or getattr(df, "empty", True):
+                try:
+                    df = call_with_retry(
+                        lambda s=symbol: ak.stock_zh_a_minute(
+                            symbol=_to_sina_stock(s),
+                            period=period,
+                            adjust="",
+                        ),
+                        label=f"sina_minute:{freq}:{symbol}",
+                        attempts=2,
+                        pause=self.request_pause,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("sina minute %s %s 失败: %s", freq, symbol, exc)
+                    df = None
+            if df is None or getattr(df, "empty", True):
+                logger.warning("%s 空结果 symbol=%s", request.kind, symbol)
+                continue
+            mapped = self._map_min_df(df, symbol=symbol, freq=freq)
+            # 按请求区间裁剪（新浪回退可能更长/更短）
+            lo, hi = start_dt, end_dt
+            mapped = [r for r in mapped if lo <= str(r["bar_time"]) <= hi]
+            rows.extend(mapped)
+        if not rows:
+            raise RuntimeError(f"{request.kind} 未拉到任何分钟 K 线")
+        return rows
+
+    def _map_min_df(self, df: Any, *, symbol: str, freq: str) -> list[dict]:
+        c_time = (
+            col_by_keywords(df.columns, ("时间", "day", "datetime", "date"))
+            or df.columns[0]
+        )
+        c_open = col_by_keywords(df.columns, ("开盘", "open"))
+        c_close = col_by_keywords(df.columns, ("收盘", "close"))
+        c_high = col_by_keywords(df.columns, ("最高", "high"))
+        c_low = col_by_keywords(df.columns, ("最低", "low"))
+        c_vol = col_by_keywords(df.columns, ("成交量", "volume"))
+        c_amt = col_by_keywords(df.columns, ("成交额", "amount"))
+        out: list[dict] = []
+        for _, row in df.iterrows():
+            bt = _normalize_bar_time(row[c_time])
+            if not bt:
+                continue
+            out.append(
+                {
+                    "symbol": symbol,
+                    "bar_time": bt,
+                    "freq": freq,
+                    "open": as_float(row[c_open]) if c_open else None,
+                    "high": as_float(row[c_high]) if c_high else None,
+                    "low": as_float(row[c_low]) if c_low else None,
+                    "close": as_float(row[c_close]) if c_close else None,
+                    "volume": as_float(row[c_vol]) if c_vol else None,
+                    "amount": as_float(row[c_amt]) if c_amt else None,
+                    "source": self.source,
+                }
+            )
+        return out
 
     def _fetch_equity_df(
         self, ak: Any, symbol: str, start: str, end: str, *, adjust: str

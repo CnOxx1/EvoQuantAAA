@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""最小日更编排：daily → security_master → ALPHA → ALPHA DQ → ops 告警。"""
+"""最小日更编排：daily → … → execution → ledger → ops 告警。"""
 
 import logging
 import sys
@@ -39,7 +39,7 @@ class StepResult:
 class ScheduleResult:
     job_id: str
     as_of: str
-    status: str  # committed / failed / skipped
+    status: str  # committed / degraded / failed / skipped
     steps: list[StepResult] = field(default_factory=list)
     message: str = ""
 
@@ -143,17 +143,105 @@ def run_once(
     )
     _safe_call(lambda: int(main.cmd_data_quality(dq_ns)), "alpha_dq", result)
 
-    # --- 5. 告警汇总 ---
+    # --- 5. 生产信号（仅 LIVE；失败不阻断 CORE）---
+    sg_ns = Namespace(
+        signal_action="run",
+        version=None,
+        live=True,
+        paper=False,
+        start=day,
+        end=day,
+        as_of=day,
+        no_dq_check=False,
+        job_id=jid,
+    )
+    _safe_call(lambda: int(main.cmd_signal(sg_ns)), "signal_live", result)
+
+    # --- 6. 组合草稿（仅 LIVE；无信号则 skipped；失败不阻断 CORE）---
+    pf_ns = Namespace(
+        portfolio_action="build",
+        version=None,
+        live=True,
+        paper=False,
+        as_of=day,
+        nav=1_000_000.0,
+        account="paper_default",
+        cost_version="v1_ashare_default",
+        signal_batch=None,
+        job_id=jid,
+        fixed_nav=False,
+        force=False,
+    )
+    _safe_call(lambda: int(main.cmd_portfolio(pf_ns)), "portfolio_live", result)
+
+    # --- 7. 风控审核 draft（失败/否决不阻断 CORE）---
+    rk_ns = Namespace(
+        risk_action="review",
+        portfolio=None,
+        drafts=True,
+        as_of=day,
+        account="paper_default",
+        limits_version="v1_default",
+        force=False,
+        actor="schedule",
+        job_id=jid,
+    )
+    _safe_call(lambda: int(main.cmd_risk(rk_ns)), "risk_review", result)
+
+    # --- 8. 纸面执行 approved（失败/阻断不阻断 CORE）---
+    ex_ns = Namespace(
+        execution_action="run",
+        portfolio=None,
+        approved=True,
+        as_of=day,
+        account="paper_default",
+        cost_version="v1_ashare_default",
+        force=False,
+        job_id=jid,
+    )
+    _safe_call(lambda: int(main.cmd_execution(ex_ns)), "execution_paper", result)
+
+    # --- 9. 账本过账（未过账 execution；失败不阻断 CORE）---
+    ld_ns = Namespace(
+        ledger_action="post",
+        execution=None,
+        unposted=True,
+        account="paper_default",
+        force=False,
+        limit=50,
+        job_id=jid,
+    )
+    _safe_call(lambda: int(main.cmd_ledger(ld_ns)), "ledger_post", result)
+
+    # --- 10. 告警汇总 ---
     _finalize_alerts(jid, day, started)
 
     failed_coreish = any(
         s.name == "daily" and s.status == "failed" for s in result.steps
     )
+    trading_names = {
+        "signal_live",
+        "portfolio_live",
+        "risk_review",
+        "execution_paper",
+        "ledger_post",
+    }
+    trading_fails = sum(
+        1 for s in result.steps if s.name in trading_names and s.status == "failed"
+    )
     alpha_fails = sum(
-        1 for s in result.steps if s.name != "daily" and s.status == "failed"
+        1
+        for s in result.steps
+        if s.name not in ({"daily"} | trading_names) and s.status == "failed"
     )
     if failed_coreish:
         result.status = "failed"
+    elif trading_fails:
+        result.status = "degraded"
+        parts = [f"trading_fails={trading_fails}"]
+        if alpha_fails:
+            parts.append(f"alpha_fails={alpha_fails}")
+        result.message = "; ".join(parts) + " (CORE ok)"
     elif alpha_fails:
         result.status = "committed"
         result.message = f"alpha_fails={alpha_fails} (CORE ok)"
@@ -250,6 +338,40 @@ def _run_alpha_incremental(
         logger.exception("valuation failed")
         result.steps.append(
             StepResult(name="valuation", status="failed", message=str(exc))
+        )
+
+    # 个股资金：供 FLOW_NET_5；分块、单 chunk 失败不阻断
+    try:
+        from data_ingest.alpha_flow.models import FetchRequest as FlowReq
+        from data_ingest.alpha_flow.service import FlowIngestService
+        from data_ingest.alpha_flow.sources import get_source as get_flow_source
+
+        flow = FlowIngestService(source=get_flow_source("akshare"))
+        chunk_results = flow.run_stock_flow_chunked(
+            FlowReq(
+                kind="stock_flow",
+                start=day,
+                end=day,
+                symbols=symbols,
+                job_id=job_id,
+            ),
+            chunk_size=20,
+        )
+        ok_n = sum(1 for x in chunk_results if x.status == "committed")
+        fail_n = len(chunk_results) - ok_n
+        fetched = sum(int(x.fetched or 0) for x in chunk_results)
+        result.steps.append(
+            StepResult(
+                name="stock_flow",
+                status="ok" if fail_n == 0 and chunk_results else "failed",
+                ref_ids=[x.batch_id for x in chunk_results if x.batch_id],
+                message=f"chunks_ok={ok_n}/{len(chunk_results)};fetched={fetched}",
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock_flow failed")
+        result.steps.append(
+            StepResult(name="stock_flow", status="failed", message=str(exc))
         )
 
 

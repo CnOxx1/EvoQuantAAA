@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import itertools
@@ -10,7 +10,7 @@ from typing import Any
 
 from data_ingest.alpha_relation.models import HOLDER_TYPES, FetchBundle, FetchRequest
 from data_ingest.alpha_relation.sources.base import RelationSource
-from data_ingest.core_ref.sources._parse import as_float, as_str, col_by_keywords
+from data_ingest.ingest_common.parse import as_float, as_str, col_by_keywords
 from shared.akshare_call import call_with_retry
 
 logger = logging.getLogger(__name__)

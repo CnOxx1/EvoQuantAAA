@@ -9,6 +9,8 @@ from research_lab.evaluate import evaluate_factor, format_eval_report
 from research_lab.factors import (
     compute_flow_net_5,
     compute_mom_20,
+    compute_tech_level,
+    compute_tech_ma20_bias,
     compute_val_pe_pct,
 )
 from research_lab.models import FACTOR_CODES, ResearchRequest, ResearchResult
@@ -174,6 +176,47 @@ class ResearchService:
                 lookback_calendar_days=14,
             )
             return compute_flow_net_5(flows, bars, start=start, end=end)
+
+        if code == "TECH_RSI_14":
+            tech = self.repo.load_tech_indicators(
+                start=start,
+                end=end,
+                symbols=symbols,
+                factor_type=request.factor_type,
+                indicator_codes=["RSI_14"],
+            )
+            return compute_tech_level(
+                tech, indicator_code="RSI_14", start=start, end=end
+            )
+
+        if code == "TECH_MACD_HIST":
+            tech = self.repo.load_tech_indicators(
+                start=start,
+                end=end,
+                symbols=symbols,
+                factor_type=request.factor_type,
+                indicator_codes=["MACD_HIST"],
+            )
+            return compute_tech_level(
+                tech, indicator_code="MACD_HIST", start=start, end=end
+            )
+
+        if code == "TECH_MA20_BIAS":
+            tech = self.repo.load_tech_indicators(
+                start=start,
+                end=end,
+                symbols=symbols,
+                factor_type=request.factor_type,
+                indicator_codes=["MA_20"],
+            )
+            bars = self.repo.load_equity_bars(
+                start=start,
+                end=end,
+                symbols=symbols,
+                factor_type=request.factor_type,
+                lookback_calendar_days=0,
+            )
+            return compute_tech_ma20_bias(tech, bars, start=start, end=end)
 
         raise ValueError(f"不支持的因子: {code}")
 

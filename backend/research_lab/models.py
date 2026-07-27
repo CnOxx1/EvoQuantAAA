@@ -3,8 +3,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-FactorCode = Literal["MOM_20", "VAL_PE_PCT", "FLOW_NET_5"]
-FACTOR_CODES: tuple[FactorCode, ...] = ("MOM_20", "VAL_PE_PCT", "FLOW_NET_5")
+FactorCode = Literal[
+    "MOM_20",
+    "VAL_PE_PCT",
+    "FLOW_NET_5",
+    "TECH_RSI_14",
+    "TECH_MACD_HIST",
+    "TECH_MA20_BIAS",
+]
+FACTOR_CODES: tuple[FactorCode, ...] = (
+    "MOM_20",
+    "VAL_PE_PCT",
+    "FLOW_NET_5",
+    "TECH_RSI_14",
+    "TECH_MACD_HIST",
+    "TECH_MA20_BIAS",
+)
 
 
 @dataclass

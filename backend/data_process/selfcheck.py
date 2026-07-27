@@ -46,6 +46,23 @@ def main() -> int:
         if r.message:
             print(f"message={r.message}")
 
+    ti = svc.run(
+        ProcessRequest(
+            kind="tech_indicator",
+            start="2026-07-01",
+            end="2026-07-23",
+            symbols=["600000", "000001"],
+            factor_type="qfq",
+            force=True,
+            chunk_size=50,
+        )
+    )
+    print(
+        f"kind={ti.kind} status={ti.status} batch={ti.process_batch_id} "
+        f"out={ti.output_rows} inserted={ti.inserted} updated={ti.updated}"
+    )
+    ok = ok and ti.status == "committed"
+
     with get_conn() as conn:
         pe = int(
             conn.execute(
@@ -65,10 +82,19 @@ def main() -> int:
                 """
             ).fetchone()["n"]
         )
-    print(f"processed_equity_bar_1d={pe} processed_index_bar_1d={pi} ret_filled={ret_n}")
+        ti_n = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM processed_tech_indicator_1d"
+            ).fetchone()["n"]
+        )
+    print(
+        f"processed_equity_bar_1d={pe} processed_index_bar_1d={pi} "
+        f"ret_filled={ret_n} tech_indicator={ti_n}"
+    )
     assert pe >= 2, "processed equity 行数不足"
     assert pi >= 1, "processed index 行数不足"
     assert ret_n >= 1, "ret_1d 应至少有一日有值"
+    assert ti.status == "committed" and ti_n >= 1, "tech_indicator 应写出至少一行"
     print("status=ok" if ok else "status=failed")
     return 0 if ok else 2
 

@@ -4,6 +4,8 @@ from research_lab.evaluate import evaluate_factor
 from research_lab.factors import (
     compute_flow_net_5,
     compute_mom_20,
+    compute_tech_level,
+    compute_tech_ma20_bias,
     compute_val_pe_pct,
 )
 
@@ -80,3 +82,42 @@ def test_evaluate_ic_forward():
     assert report["layers"][0]["days"] == 1
     assert report["long_short_q5_q1"] is not None
     assert report["long_short_q5_q1"] > 0
+
+
+def test_tech_rsi_passthrough():
+    tech = [
+        {
+            "symbol": "A",
+            "trade_date": "2026-07-01",
+            "indicator_code": "RSI_14",
+            "value": 55.0,
+        },
+        {
+            "symbol": "A",
+            "trade_date": "2026-07-01",
+            "indicator_code": "MA_5",
+            "value": 1.0,
+        },
+    ]
+    rows = compute_tech_level(
+        tech, indicator_code="RSI_14", start="2026-07-01", end="2026-07-01"
+    )
+    assert len(rows) == 1
+    assert rows[0]["value"] == 55.0
+
+
+def test_tech_ma20_bias():
+    tech = [
+        {
+            "symbol": "A",
+            "trade_date": "2026-07-01",
+            "indicator_code": "MA_20",
+            "value": 10.0,
+        }
+    ]
+    bars = [{"symbol": "A", "trade_date": "2026-07-01", "adj_close": 11.0}]
+    rows = compute_tech_ma20_bias(
+        tech, bars, start="2026-07-01", end="2026-07-01"
+    )
+    assert len(rows) == 1
+    assert abs(rows[0]["value"] - 0.1) < 1e-9

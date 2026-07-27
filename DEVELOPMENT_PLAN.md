@@ -20,7 +20,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `019`（含 `ops_alert`），**新迁移从 `020` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `029`（prod_hardening），**新迁移从 `030` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -48,8 +48,20 @@
 | 日更编排 `python main.py schedule --once/--at` | `backend/orchestrator/scheduler.py` |
 | 失败告警 `ops_alert` + 可选 webhook | `backend/ops_monitor/notify.py` |
 | 覆盖度矩阵 `python main.py coverage` | `backend/ops_monitor/coverage.py` |
+| 日线技术指标 `data_process --kind tech_indicator` | `backend/data_process/tech_indicator.py` |
+| 分钟 K 15m/60m | `core_market` + `data_process` + `processed_tech_indicator_min` |
+| tech 派生研究因子 TECH_* | `backend/research_lab/`（经库读 tech 表） |
+| 日更 ALPHA含 stock_flow | `orchestrator/scheduler.py` / `cmd_daily --with-alpha` |
+| 策略注册 + 生产信号 | `strategy_registry` / `signal_prod`（迁移 `023`） |
+| 目标持仓草稿 | `portfolio_construct`（迁移 `024`） |
+| 风控放行/Kill Switch | `risk_engine`（迁移 `025`） |
+| 纸面 OMS 事件 | `execution`（迁移 `026`） |
+| 账本过账 + T+1 | `ledger`（迁移 `027`） |
+| 对外 API 网关 | `api_gateway`（迁移 `028`） |
+| 生产硬化 | 差额成交 / 按日幂等 / 账本原子过账（迁移 `029`） |
+| E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
 
-> **阶段 4 状态（2026-07-27）**：4.1–4.4 已落地（schedule / ops_alert / coverage / 新闻去重水位回看）。`DEVELOPMENT_PLAN` 主线任务至此收官；后续按需扩生产链路。
+> **阶段 12（2026-07-27）**：E2E 短窗回归 + console 只读页。主线下一优先：写操作 UI / 告警分级 / execution 事件原子化。
 
 ---
 
@@ -239,7 +251,91 @@ CREATE TABLE IF NOT EXISTS research_run (
 - 严格按 1.1 → 1.2 → 1.3 → 2.1 → … 顺序；每个任务一个 commit（格式与现有历史一致：英文祈使句一行）
 - 每个任务完成 = 代码 + 单测/selfcheck + README 同步 + 冒烟命令截图/输出贴 PR 或回复
 - 不确定的设计决策：优先选择**最简单且不违反 0.3 不变量**的方案，并在代码注释与回复中说明
-- **明确不做**（本期范围外）：signal_prod / risk_engine / execution / ledger / api_gateway / frontend、Tick 数据、机器学习因子、多数据源冗余
+- **明确不做**（阶段 10 仍范围外）：实盘柜台 / 完整 frontend UI、Tick 数据、机器学习因子、多数据源冗余
+
+---
+
+## 阶段 5 · 研究→生产隔离（strategy_registry + signal_prod）
+
+### 任务 5.1 strategy_registry
+
+**要求**：迁移 `023` 建 `strategy_version` / `strategy_transition`；CLI `strategy register|promote|retire|list|show`；状态机 DRAFT→BACKTESTED→PAPER→LIVE（可 RETIRED）；晋升 BACKTESTED 需 committed `backtest_run`；同 code 至多一 LIVE。
+
+### 任务 5.2 signal_prod
+
+**要求**：仅 PAPER/LIVE；读库内 `research_factor_value` 生成 FACTOR_TOP_N 目标权重（前一日因子，禁前视）；写 `signal_batch` / `signal_prod_weight`；DQ 覆盖区间 passed；`schedule` 日更跑 LIVE（非调仓日 skipped）。
+
+**验收**：register→promote→`signal run` 落库；selfcheck + pytest；README/schema 同步。
+
+---
+
+## 阶段 6 · 组合草稿（portfolio_construct）
+
+### 任务 6.1 portfolio_construct
+
+**要求**：迁移 `024` 建 `portfolio_target` / `portfolio_target_position`；仅 PAPER/LIVE；读 `signal_prod_weight`（as_of 及之前最近调仓日）；剔 `can_buy!=1`/缺价后重归一；按 `cost_params.lot_size` 整手下取；写 `status=draft`；CLI `portfolio build|list|show`；`schedule` 在 signal 后跑 LIVE。
+
+**验收**：对已有 LIVE 信号 `portfolio build --as-of` 出草稿；selfcheck/pytest；文档同步。
+
+---
+
+## 阶段 7 · 风控关卡（risk_engine）
+
+### 任务 7.1 risk_engine
+
+**要求**：迁移 `025` 建 `risk_decision` / `kill_switch` / `risk_limits`；硬规则（Kill Switch、单票权重、只数、敞口、can_buy、整手）；CLI `risk review|kill|status|list|show`；通过则 `portfolio_target.status=approved`，否则 `rejected`；`schedule` 在 portfolio 后审当日 draft。
+
+**验收**：draft 可放行；Kill Switch on 必否决；selfcheck/pytest；文档同步。
+
+---
+
+## 阶段 8 · 纸面执行（execution）
+
+### 任务 8.1 execution
+
+**要求**：迁移 `026` 建 `execution_run` / `order_event` / `fill_event`；仅 `approved` + 最新 `risk_decision=approved` + kill off；paper 适配器按空仓→目标生成 BUY 并即时成交；费用读 `cost_params`；成功后 portfolio→`executed`；CLI `execution run|list|show`；`schedule` 在 risk 后跑 approved。
+
+**验收**：approved 组合可 committed；kill on / 非 approved → blocked；selfcheck/pytest；文档同步。
+
+---
+
+## 阶段 9 · 账本过账（ledger）
+
+### 任务 9.1 ledger
+
+**要求**：迁移 `027` 建账户/过账/分录/余额/批次表；消费 committed `fill_event`；BUY 扣现金建 lot，SELL 校验 T+1 FIFO；同一 execution 幂等；CLI `ledger ensure|post|show|sellable|list`；`schedule` 在 execution 后 `post --unposted`。
+
+**验收**：对已有 paper execution 过账成功；同日卖出在投影单测中被拒；文档同步。
+
+---
+
+## 阶段 10 · 对外网关（api_gateway）
+
+### 任务 10.1 api_gateway
+
+**要求**：迁移 `028` 建 `api_audit_log`；FastAPI `/v1` 查询（strategies/portfolios/risk/executions/ledger/alerts）+ 写（promote / kill / review）；可选 `ASHARE_API_TOKEN`；CLI `gateway`；selfcheck/pytest；README 同步。
+
+**验收**：`/health` 与 `/v1/strategies` 可通；写操作落审计；文档同步。
+
+---
+
+## 阶段 11 · 生产链路硬化
+
+### 任务 11.1 幂等 / 差额 / 原子过账
+
+**要求**：迁移 `029`；execution 读 ledger 持仓做差额+T+1 可卖；portfolio 同日活跃幂等 + 默认账本 NAV + 仅 committed 信号；ledger 分录与 committed 同事务；schedule 交易步骤失败 → `degraded`；ingest `timeutil`/`_parse` 迁 `shared` / `ingest_common`。
+
+**验收**：pytest 全绿；重跑 schedule 不叠加空仓全买；文档同步。
+
+---
+
+## 阶段 12 · E2E 回归 + 最小前端
+
+### 任务 12.1 e2e + console
+
+**要求**：`python main.py e2e` 自备种子跑通 register→…→ledger→API，并断言组合/执行/过账幂等；`frontend/console` 静态只读页对接 gateway（CORS）；文档同步。
+
+**验收**：`e2e` exit 0；console 可拉 `/v1/strategies` 与 kill/ledger。
 
 ## 汇总清单
 
@@ -260,3 +356,12 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 4 | 4.2 失败告警 | `ops_alert` |
 | 4 | 4.3 coverage 命令 | 覆盖度矩阵 |
 | 4 | 4.4 新闻去重/水位回看 | 舆情数据可用性 |
+| 5 | 5.1 strategy_registry | 版本状态机 |
+| 5 | 5.2 signal_prod | 生产权重 + schedule LIVE |
+| 6 | 6.1 portfolio_construct | 目标持仓 draft + schedule LIVE |
+| 7 | 7.1 risk_engine | 硬规则放行 + Kill Switch |
+| 8 | 8.1 execution | 纸面 order/fill 事件 |
+| 9 | 9.1 ledger | fill 过账 + T+1 可卖 |
+| 10 | 10.1 api_gateway | FastAPI 查询/Kill/晋升 |
+| 11 | 11.1 prod hardening | 差额成交 / 幂等 / 原子过账 / degraded |
+| 12 | 12.1 e2e + console | 短窗 E2E + 只读台 |

@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from data_ingest.alpha_announcement.timeutil import utc_now_iso
+from shared.timeutil import utc_now_iso
 from data_ingest.alpha_news_monitor.dedupe import title_hash
 from data_ingest.alpha_news_monitor.models import NewsRecord, UpsertStats
 from shared.bulk_upsert import upsert_rows

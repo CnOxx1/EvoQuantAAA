@@ -30,6 +30,10 @@ class MockCoreMarketSource(CoreMarketSource):
             rows = self._abnormal_move(request)
         elif request.kind == "board_1d":
             rows = self._board_1d(request)
+        elif request.kind == "equity_15m":
+            rows = self._equity_min(request, freq="15m")
+        elif request.kind == "equity_60m":
+            rows = self._equity_min(request, freq="60m")
         else:
             raise ValueError(f"unsupported kind: {request.kind}")
         return FetchBundle(kind=request.kind, rows=rows, source=self.source)
@@ -259,6 +263,32 @@ class MockCoreMarketSource(CoreMarketSource):
                             "amount": 1e10,
                             "pct_chg": 0.5,
                             "turnover": 1.2,
+                            "source": self.source,
+                        }
+                    )
+        return rows
+
+    def _equity_min(self, request: FetchRequest, *, freq: str) -> list[dict]:
+        times_15 = ("09:45:00", "10:00:00", "10:15:00", "10:30:00", "14:45:00", "15:00:00")
+        times_60 = ("10:30:00", "11:30:00", "14:00:00", "15:00:00")
+        slots = times_15 if freq == "15m" else times_60
+        rows: list[dict] = []
+        px = 10.0
+        for symbol in self._symbols(request):
+            for d in self._dates(request):
+                for t in slots:
+                    px += 0.01
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "bar_time": f"{d} {t}",
+                            "freq": freq,
+                            "open": px - 0.02,
+                            "high": px + 0.05,
+                            "low": px - 0.05,
+                            "close": px,
+                            "volume": 100000.0,
+                            "amount": px * 100000.0,
                             "source": self.source,
                         }
                     )

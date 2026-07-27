@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`019`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`029`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -26,6 +26,16 @@
 | `017_research_lab.sql` | `research_run`、`research_factor_value`（基线因子） |
 | `018_phase3_pit_correctness.sql` | `processed_fund_snapshot`（基本面 PIT 区间） |
 | `019_ops_schedule.sql` | `ops_alert`（编排告警） |
+| `020_tech_indicator.sql` | `processed_tech_indicator_1d`（日线技术指标长表） |
+| `021_tech_indicator_category.sql` | `processed_tech_indicator_1d.category`（pandas-ta 分类） |
+| `022_equity_bar_min.sql` | `raw/processed_equity_bar_min` + `processed_tech_indicator_min`（15m/60m） |
+| `023_strategy_signal.sql` | `strategy_version` / `strategy_transition` / `signal_batch` / `signal_prod_weight` |
+| `024_portfolio_construct.sql` | `portfolio_target` / `portfolio_target_position`（草稿） |
+| `025_risk_engine.sql` | `risk_decision` / `kill_switch` / `risk_limits` |
+| `026_execution.sql` | `execution_run` / `order_event` / `fill_event` |
+| `027_ledger.sql` | `ledger_account` / `ledger_posting` / `ledger_entry` / `ledger_balance` / `ledger_lot` |
+| `028_api_gateway.sql` | `api_audit_log`（网关写操作审计） |
+| `029_prod_hardening.sql` | 组合按日活跃唯一；execution/ledger `running` 唯一 |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

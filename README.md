@@ -11,7 +11,7 @@
 
 EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架：从外部数据拉取、复权加工、质量门禁、Universe、回测，一路延伸到信号晋升、组合、风控、OMS 与账本。
 
-当前阶段重点是 **CORE 可回测闭环 + ALPHA 可插拔补数**，用真实数据源（akshare / 东财等）写入 PostgreSQL，避免 mock 污染生产库。
+当前已完成 **CORE 可回测闭环 + ALPHA 可插拔补数 + 研究/日更编排**；用真实数据源（akshare / 东财等）写入 PostgreSQL，避免 mock 污染生产库。实盘生产链路（信号晋升→组合→风控→OMS→账本）仍待建。
 
 ### 1.1 设计目标
 
@@ -46,11 +46,14 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 │   ├── data_quality/            # DQ 门禁
 │   ├── security_master/         # Universe 日快照
 │   ├── backtest/                # A 股约束回测
+│   ├── research_lab/            # 基线因子 + IC/分层
+│   ├── orchestrator/            # schedule 日更编排
+│   ├── ops_monitor/             # 告警 + 覆盖度
 │   ├── tests/                   # pytest（不连库）
 │   ├── shared/                  # DB / 配置 / Universe 解析等
-│   └── …（orchestrator、research_lab、risk_engine 等骨架）
+│   └── …（signal_prod、risk_engine、execution 等骨架）
 ├── database/
-│   ├── migrations/              # 001–019 SQL（权威演进）
+│   ├── migrations/              # 001–029 SQL（权威演进）
 │   ├── schema/                  # 产消契约说明
 │   └── seeds/
 └── scripts/                     # 辅助脚本
@@ -60,7 +63,10 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 
 ---
 
-## 3. 主链路
+## 3. 主链路与模块完成度
+
+> **一句话**：数据与研究回测平台已成形；实盘信号、组合、风控、下单、账本、对外 API 还没建。  
+> 任务书阶段 1–4 已收官，详见 [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)。
 
 ```text
 外部源
@@ -69,33 +75,50 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
   → data_quality (dq_gate)
   → security_master (universe_snapshot)
   → backtest / research_lab
-  → strategy_registry → signal_prod
-  → portfolio_construct → risk_engine
-  → execution → ledger → ops_monitor
+  → strategy_registry → signal_prod          ← 已落地（FACTOR_TOP_N）
+  → portfolio_construct                      ← 已落地（draft）
+  → risk_engine                              ← 已落地（approved/rejected + Kill Switch）
+  → execution                                ← 已落地（paper order/fill）
+  → ledger                                   ← 已落地（过账 + T+1）
+  → ops_monitor（告警/覆盖度已落地）
 
-编排：orchestrator（只传 job_id / batch_id / run_id …）
-对外：api_gateway
+编排：orchestrator（schedule；只传 job_id / batch_id / run_id / strategy_version / portfolio_id / execution_id …）
+对外：api_gateway（FastAPI /v1；已落地）
 ```
 
-### 3.1 已落地能力（可跑 CLI）
+已串通能力链：
 
-| 阶段 | 模块 | 状态摘要 |
-| --- | --- | --- |
-| 契约 | `database/migrations` 001–019 | 已应用 |
-| CORE 参考 | `core_ref` | 日历/上市/行业/股本/成分/ST/解禁 |
-| CORE 行情 | `core_market` | 日线、复权、停牌、涨跌停、指数、公司行为、市场排名、盘口异动、板块日线；TOP100 长窗样本已 DQ pass |
-| 加工 | `data_process` | 复权/掩码；涨跌停价格推导；`fundamental_pit` |
-| 门禁 | `data_quality` | CORE（含除权校验）+ ALPHA 报告（不进 gate） |
-| Universe | `security_master` | 默认 `TOP100` / `SECTOR_LEADERS`（全市场仅按需） |
-| 回测 | `backtest` | `EW_HOLD` / `EW_REBALANCE` / `FACTOR_TOP_N`；T+1、印花税、整手 |
-| 研究 | `research_lab` | 基线因子落库 + RankIC/分层；经库对接回测 |
-| 编排 | `orchestrator` | `schedule --once/--at`：daily→快照→ALPHA→告警 |
-| 运维 | `ops_monitor` | `ops_alert` + `coverage` 覆盖度矩阵 |
-| ALPHA | announcement / fundamental / flow / news / contract / relation | 财报估值股东、资金两融龙虎榜、公告、新闻/政策、合同中标、个股关系边（图谱） |
+**取数 → 加工 → DQ → Universe → 因子/研究 → 回测 → 晋升 → 生产信号 → 组合草稿 → 风控放行 → 纸面执行 → 账本过账 → API 网关 → 日更编排与告警**
 
-### 3.2 骨架/待建
+### 3.1 已完成（可 CLI 跑）
 
-`signal_prod`、`strategy_registry`、`portfolio_construct`、`risk_engine`、`execution`、`ledger`、`api_gateway`、多数 `frontend/*`。
+| 模块 | 做什么 |
+| --- | --- |
+| 契约 / 库 | 迁移 `001`–`029`，PostgreSQL（pgembed） |
+| `core_ref` | 日历、上市、行业、股本、成分、ST、解禁 |
+| `core_market` | 日线/复权/停牌/涨跌停/指数/公司行为/排名/异动/板块；**15m/60m 分钟 K**（短窗按需）；TOP100 长窗日线已 DQ pass |
+| ALPHA ingest | `announcement` / `fundamental` / `flow` / `news` / `contract` / `relation`（财报估值股东、资金两融龙虎榜、公告、新闻/政策、合同中标、个股关系边） |
+| `data_process` | 复权、`can_buy`/`can_sell`、涨跌停推导、基本面 PIT、日线技术指标（`core` 13 码 + `full` pandas-ta 全部分类 ~250+ 序列） |
+| `data_quality` | CORE gate（含除权校验）+ ALPHA 报告（不进 gate） |
+| `security_master` | Universe 快照（`TOP100` / `SECTOR_LEADERS` 等；全市场仅按需） |
+| `backtest` | `EW_HOLD` / `EW_REBALANCE` / `FACTOR_TOP_N`（T+1、印花税、整手） |
+| `research_lab` | `MOM_20` / `VAL_PE_PCT` / `FLOW_NET_5` + **TECH_RSI_14 / TECH_MACD_HIST / TECH_MA20_BIAS**；RankIC/分层；经库对接回测 |
+| `strategy_registry` | 版本登记与晋升（DRAFT→BACKTESTED→PAPER→LIVE）；审计 `strategy_transition` |
+| `signal_prod` | PAPER/LIVE 生成 `signal_prod_weight`（FACTOR_TOP_N，前一日因子） |
+| `portfolio_construct` | 最近调仓日 **committed** 信号 → 整手目标持仓 **draft**（同日幂等；默认账本 NAV） |
+| `risk_engine` | 硬规则审 draft → approved/rejected；Kill Switch；`risk_limits` |
+| `execution` | paper OMS：approved → 账本**差额** `order_event`/`fill_event`；portfolio→executed |
+| `ledger` | 消费 fill **原子**过账；现金/持仓/`ledger_lot` T+1 可卖 |
+| `api_gateway` | FastAPI `/v1`：查询 + Kill/晋升/审核；可选 Bearer；`api_audit_log` |
+| `orchestrator` | `schedule`：… → execution → ledger；交易失败 → `degraded` |
+| `ops_monitor` | `ops_alert`、可选 webhook、`coverage`（含 news/tech/min） |
+| 基建 | pytest、GitHub CI、`daily` 增量流水线 |
+
+### 3.2 未做（骨架 / 范围外）
+
+多数 `frontend/*` 专项页仍占位；**console 只读台已可用**。
+
+本期明确不做：Tick/L2、机器学习因子、多数据源冗余、实盘柜台直连。
 
 ---
 
@@ -180,6 +203,72 @@ python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
 
 > 维护约定：有可合并的功能/数据里程碑时，在本节**顶部**追加一条（新→旧）。  
 > 格式：日期 · 标题 · 要点列表 ·（可选）影响范围。
+
+### 2026-07-27 · 阶段 12：E2E + console 只读页
+- `python main.py e2e`：自备种子 register→…→ledger→API，幂等断言
+- `frontend/console`：静态页拉 `/v1`；gateway CORS 放开本地静态源
+
+### 2026-07-27 · 阶段 11：生产链路硬化
+- 迁移 `029`：组合按日活跃唯一；execution/ledger `running` 唯一
+- execution：账本差额成交 + T+1 可卖；portfolio：同日幂等 / 账本 NAV / committed 信号
+- ledger：分录与 committed 同事务；schedule 交易失败 → `degraded`
+- ingest：`shared.timeutil` + `ingest_common.parse`
+
+### 2026-07-27 · 阶段 10：api_gateway
+
+- 迁移 `028`：`api_audit_log`
+- FastAPI `/v1`：strategies / portfolios / risk(kill|review) / executions / ledger / alerts
+- 可选 `ASHARE_API_TOKEN`；CLI `gateway --port 8080`；写操作审计
+
+### 2026-07-27 · 阶段 9：ledger（过账 + T+1）
+
+- 迁移 `027`：`ledger_account` / `ledger_posting` / `ledger_entry` / `ledger_balance` / `ledger_lot`
+- 消费 committed `fill_event`；FIFO T+1 可卖；同 execution 幂等
+- CLI：`ledger ensure|post|show|sellable|list`；`schedule` 过账 unposted
+
+### 2026-07-27 · 阶段 8：execution（paper OMS）
+
+- 迁移 `026`：`execution_run` / `order_event` / `fill_event`
+- 仅 approved + risk_decision + kill off；**账本差额**纸面成交；费用读 `cost_params`
+- CLI：`execution run|list|show`；`schedule` 在 risk 后执行
+
+### 2026-07-27 · 阶段 7：risk_engine
+
+- 迁移 `025`：`risk_decision` / `kill_switch` / `risk_limits`
+- CLI：`risk review|kill|status|list|show`；硬规则放行/否决 draft
+- Kill Switch（GLOBAL/账户）；`schedule` 审当日 draft
+
+### 2026-07-27 · 阶段 6：portfolio_construct
+
+- 迁移 `024`：`portfolio_target` / `portfolio_target_position`
+- CLI：`portfolio build|list|show`；仅 PAPER/LIVE；最近调仓日信号 → 整手 draft
+- 剔 `can_buy!=1`/缺价后重归一；`schedule` 在 signal 后构建 LIVE 草稿
+
+### 2026-07-27 · 阶段 5：strategy_registry + signal_prod
+
+- 迁移 `023`：`strategy_version` / `strategy_transition` / `signal_batch` / `signal_prod_weight`
+- CLI：`strategy register|promote|retire|list|show`；`signal run|list`
+- 生产信号仅 PAPER/LIVE；FACTOR_TOP_N 前一日因子禁前视；DQ 覆盖区间
+- `schedule` 增加 LIVE 信号步（非调仓日 skipped）
+
+### 2026-07-27 · 优化补丁：日更资金 + tech 进研究
+
+- `schedule` / `daily --with-alpha`：ALPHA 增加 `stock_flow`（分块），保鲜 `FLOW_NET_5`
+- `research_lab`：`TECH_RSI_14` / `TECH_MACD_HIST` / `TECH_MA20_BIAS` 经库读 `processed_tech_indicator_1d`
+- `coverage`：扩 news / tech_1d / equity_min
+
+### 2026-07-27 · 分钟 K 15m/60m + 分钟技术指标
+
+- 迁移 `022`：`raw_equity_bar_min` / `processed_equity_bar_min` / `processed_tech_indicator_min`
+- ingest：`equity_15m` / `equity_60m`（东财 hist_min_em，回退新浪）；process 用当日 adj_factor
+- `tech_indicator --freq 15m|60m`；短窗少标的，不进默认 schedule
+
+### 2026-07-27 · 日线技术指标全部分类（data_process）
+
+- 迁移 `020`/`021`：`processed_tech_indicator_1d` + `category`
+- `suite=core`：13 兼容码（日更默认）；`suite=full`：pandas-ta 九类 ~150 函数 / ~250+ 序列
+- `--list-tech-catalog` / `--category momentum`；只读 processed OHLCV，不进 ingest
+- 默认 Universe（TOP100）；全量请短窗少标的，本机勿 ALL_LISTED
 
 ### 2026-07-27 · 编排与运维收尾（阶段 4）
 

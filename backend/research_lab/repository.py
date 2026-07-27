@@ -134,6 +134,36 @@ class ResearchRepository:
                 for r in conn.execute(sql, (load_start, end, *symbols)).fetchall()
             ]
 
+    def load_tech_indicators(
+        self,
+        *,
+        start: str,
+        end: str,
+        symbols: list[str],
+        factor_type: str,
+        indicator_codes: list[str],
+    ) -> list[dict[str, Any]]:
+        """只读 processed_tech_indicator_1d（经库；不 import data_process）。"""
+        if not symbols or not indicator_codes:
+            return []
+        sql = f"""
+            SELECT symbol, trade_date, indicator_code, value, category
+            FROM processed_tech_indicator_1d
+            WHERE factor_type=? AND trade_date>=? AND trade_date<=?
+              AND symbol IN ({_ph(len(symbols))})
+              AND indicator_code IN ({_ph(len(indicator_codes))})
+            ORDER BY symbol, trade_date, indicator_code
+        """
+        params: list[Any] = [
+            factor_type,
+            start[:10],
+            end[:10],
+            *symbols,
+            *indicator_codes,
+        ]
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
     def create_run(self, row: dict[str, Any]) -> None:
         with get_conn() as conn:
             conn.execute(

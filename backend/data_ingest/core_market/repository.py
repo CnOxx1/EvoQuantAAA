@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from data_ingest.alpha_announcement.timeutil import utc_now_iso
+from shared.timeutil import utc_now_iso
 from data_ingest.core_market.models import FetchBundle, IngestKind, UpsertStats
 from shared.bulk_upsert import upsert_rows
 from shared.db import get_conn
@@ -222,6 +222,56 @@ _UPSERT_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
             "source",
         ),
     ),
+    "equity_15m": (
+        """
+        INSERT INTO raw_equity_bar_min (
+            batch_id, symbol, bar_time, freq, open, high, low, close,
+            volume, amount, source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(symbol, bar_time, freq, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            open=excluded.open, high=excluded.high, low=excluded.low,
+            close=excluded.close, volume=excluded.volume, amount=excluded.amount,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "symbol",
+            "bar_time",
+            "freq",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "source",
+        ),
+    ),
+    "equity_60m": (
+        """
+        INSERT INTO raw_equity_bar_min (
+            batch_id, symbol, bar_time, freq, open, high, low, close,
+            volume, amount, source, ingested_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(symbol, bar_time, freq, source) DO UPDATE SET
+            batch_id=excluded.batch_id,
+            open=excluded.open, high=excluded.high, low=excluded.low,
+            close=excluded.close, volume=excluded.volume, amount=excluded.amount,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            "symbol",
+            "bar_time",
+            "freq",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "source",
+        ),
+    ),
 }
 
 _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
@@ -261,6 +311,14 @@ _EXIST_SQL: dict[IngestKind, tuple[str, tuple[str, ...]]] = {
         "SELECT 1 FROM raw_board_bar_1d WHERE board_type=? AND board_name=? AND trade_date=? AND source=?",
         ("board_type", "board_name", "trade_date", "source"),
     ),
+    "equity_15m": (
+        "SELECT 1 FROM raw_equity_bar_min WHERE symbol=? AND bar_time=? AND freq=? AND source=?",
+        ("symbol", "bar_time", "freq", "source"),
+    ),
+    "equity_60m": (
+        "SELECT 1 FROM raw_equity_bar_min WHERE symbol=? AND bar_time=? AND freq=? AND source=?",
+        ("symbol", "bar_time", "freq", "source"),
+    ),
 }
 
 
@@ -296,6 +354,7 @@ class CoreMarketRepository:
             "raw_market_rank_1d",
             "raw_abnormal_move",
             "raw_board_bar_1d",
+            "raw_equity_bar_min",
         ]
         out: dict[str, int] = {}
         with get_conn() as conn:

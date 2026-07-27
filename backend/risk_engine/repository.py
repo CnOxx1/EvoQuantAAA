@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from shared.db import get_conn
+from risk_engine.models import RiskLimits
+
+
+class RiskRepository:
+    def load_limits(self, version: str) -> RiskLimits:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT version, max_single_weight, max_names, max_gross_exposure, min_names
+                FROM risk_limits WHERE version=?
+                """,
+                (version,),
+            ).fetchone()
+        if not row:
+            raise RuntimeError(f"risk_limits 不存在: {version}")
+        return RiskLimits(
+            version=str(row["version"]),
+            max_single_weight=float(row["max_single_weight"]),
+            max_names=int(row["max_names"]),
+            max_gross_exposure=float(row["max_gross_exposure"]),
+            min_names=int(row["min_names"] or 1),
+        )
+
+    def load_lot_size(self, cost_version: str) -> int:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT lot_size FROM cost_params WHERE version=?",
+                (cost_version,),
+            ).fetchone()
+        if not row:
+            return 100
+        return int(row["lot_size"] or 100)
+
+    def get_kill_switch(self, scope_key: str) -> dict[str, Any]:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM kill_switch WHERE scope_key=?",
+                (scope_key,),
+            ).fetchone()
+        if not row:
+            return {
+                "scope_key": scope_key,
+                "is_on": 0,
+                "reason": None,
+                "actor": None,
+                "updated_at": None,
+            }
+        return dict(row)
+
+    def is_kill_on(self, *, account_id: str) -> tuple[bool, list[str]]:
+        """GLOBAL 或账户任一开启即 True；返回 (on, scopes)。"""
+        scopes: list[str] = []
+        global_sw = self.get_kill_switch("GLOBAL")
+        if int(global_sw.get("is_on") or 0) == 1:
+            scopes.append("GLOBAL")
+        acct = self.get_kill_switch(account_id)
+        if int(acct.get("is_on") or 0) == 1:
+            scopes.append(account_id)
+        return bool(scopes), scopes
+
+    def set_kill_switch(
+        self,
+        *,
+        scope_key: str,
+        is_on: bool,
+        reason: str | None,
+        actor: str,
+        updated_at: str,
+    ) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO kill_switch (scope_key, is_on, reason, actor, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (scope_key) DO UPDATE SET
+                    is_on=EXCLUDED.is_on,
+                    reason=EXCLUDED.reason,
+                    actor=EXCLUDED.actor,
+                    updated_at=EXCLUDED.updated_at
+                """,
+                (scope_key, 1 if is_on else 0, reason, actor, updated_at),
+            )
+
+    def list_kill_switches(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM kill_switch ORDER BY scope_key"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_portfolio(self, portfolio_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM portfolio_target WHERE portfolio_id=?",
+                (portfolio_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_positions(self, portfolio_id: str) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM portfolio_target_position
+                WHERE portfolio_id=?
+                ORDER BY symbol
+                """,
+                (portfolio_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_draft_portfolios(
+        self, *, as_of: str | None = None, account_id: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM portfolio_target WHERE status='draft'"
+        params: list[Any] = []
+        if as_of:
+            sql += " AND as_of_date=?"
+            params.append(as_of[:10])
+        if account_id:
+            sql += " AND account_id=?"
+            params.append(account_id)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def latest_decision(self, portfolio_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM risk_decision
+                WHERE portfolio_id=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (portfolio_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def insert_decision(self, row: dict[str, Any]) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO risk_decision (
+                    decision_id, portfolio_id, account_id, as_of_date, status,
+                    kill_switch_on, breach_count, breaches_json, meta_json,
+                    actor, job_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["decision_id"],
+                    row["portfolio_id"],
+                    row["account_id"],
+                    row.get("as_of_date"),
+                    row["status"],
+                    row["kill_switch_on"],
+                    row["breach_count"],
+                    json.dumps(row.get("breaches") or [], ensure_ascii=False),
+                    json.dumps(row.get("meta") or {}, ensure_ascii=False),
+                    row.get("actor"),
+                    row.get("job_id"),
+                    row["created_at"],
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE portfolio_target
+                SET status=?
+                WHERE portfolio_id=?
+                """,
+                (row["status"], row["portfolio_id"]),
+            )
+
+    def get_decision(self, decision_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM risk_decision WHERE decision_id=?",
+                (decision_id,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["breaches"] = json.loads(str(d.get("breaches_json") or "[]"))
+        except json.JSONDecodeError:
+            d["breaches"] = []
+        try:
+            d["meta"] = json.loads(str(d.get("meta_json") or "{}"))
+        except json.JSONDecodeError:
+            d["meta"] = {}
+        return d
+
+    def list_decisions(
+        self,
+        *,
+        portfolio_id: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM risk_decision WHERE 1=1"
+        params: list[Any] = []
+        if portfolio_id:
+            sql += " AND portfolio_id=?"
+            params.append(portfolio_id)
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]

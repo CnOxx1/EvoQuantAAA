@@ -11,6 +11,8 @@ from research_lab.evaluate import evaluate_factor
 from research_lab.factors import (
     compute_flow_net_5,
     compute_mom_20,
+    compute_tech_level,
+    compute_tech_ma20_bias,
     compute_val_pe_pct,
 )
 
@@ -83,6 +85,32 @@ def _run_mock() -> None:
     report = evaluate_factor(factor_rows=factor_rows, ret_rows=ret_rows)
     assert report["ic_days"] == 1 and report["ic_mean"] is not None
     assert report["ic_mean"] > 0.99
+
+    tech = [
+        {
+            "symbol": "600000",
+            "trade_date": "2026-04-01",
+            "indicator_code": "RSI_14",
+            "value": 40.0,
+        },
+        {
+            "symbol": "600000",
+            "trade_date": "2026-04-01",
+            "indicator_code": "MA_20",
+            "value": 10.0,
+        },
+    ]
+    rsi = compute_tech_level(
+        tech, indicator_code="RSI_14", start="2026-04-01", end="2026-04-01"
+    )
+    assert len(rsi) == 1 and rsi[0]["value"] == 40.0
+    bias = compute_tech_ma20_bias(
+        tech,
+        [{"symbol": "600000", "trade_date": "2026-04-01", "adj_close": 11.0}],
+        start="2026-04-01",
+        end="2026-04-01",
+    )
+    assert len(bias) == 1 and abs(bias[0]["value"] - 0.1) < 1e-9
 
     print("mock_cases=ok")
 

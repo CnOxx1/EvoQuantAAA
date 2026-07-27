@@ -172,3 +172,62 @@ def compute_flow_net_5(
             )
     out.sort(key=lambda r: (r["trade_date"], r["symbol"]))
     return out
+
+
+def compute_tech_level(
+    tech_rows: list[dict[str, Any]],
+    *,
+    indicator_code: str,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """直接透传 processed_tech_indicator_1d 某码为因子值（无未来函数）。"""
+    out: list[dict[str, Any]] = []
+    for r in tech_rows:
+        if str(r.get("indicator_code") or "") != indicator_code:
+            continue
+        d = str(r["trade_date"])[:10]
+        if d < start or d > end:
+            continue
+        if r.get("value") is None:
+            continue
+        out.append(
+            {
+                "symbol": str(r["symbol"]),
+                "trade_date": d,
+                "value": float(r["value"]),
+            }
+        )
+    out.sort(key=lambda x: (x["trade_date"], x["symbol"]))
+    return out
+
+
+def compute_tech_ma20_bias(
+    tech_rows: list[dict[str, Any]],
+    bars: list[dict[str, Any]],
+    *,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """TECH_MA20_BIAS = adj_close / MA_20 - 1（MA 来自 tech 表）。"""
+    ma: dict[tuple[str, str], float] = {}
+    for r in tech_rows:
+        if str(r.get("indicator_code") or "") != "MA_20":
+            continue
+        if r.get("value") is None:
+            continue
+        ma[(str(r["symbol"]), str(r["trade_date"])[:10])] = float(r["value"])
+
+    out: list[dict[str, Any]] = []
+    for b in bars:
+        sym = str(b["symbol"])
+        d = str(b["trade_date"])[:10]
+        if d < start or d > end:
+            continue
+        ac = b.get("adj_close")
+        m = ma.get((sym, d))
+        if ac is None or m is None or m == 0:
+            continue
+        out.append({"symbol": sym, "trade_date": d, "value": float(ac) / m - 1.0})
+    out.sort(key=lambda x: (x["trade_date"], x["symbol"]))
+    return out

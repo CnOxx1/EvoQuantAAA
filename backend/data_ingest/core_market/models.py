@@ -13,6 +13,8 @@ IngestKind = Literal[
     "market_rank",
     "abnormal_move",
     "board_1d",
+    "equity_15m",
+    "equity_60m",
 ]
 
 VALID_KINDS: tuple[str, ...] = (
@@ -25,7 +27,12 @@ VALID_KINDS: tuple[str, ...] = (
     "market_rank",
     "abnormal_move",
     "board_1d",
+    "equity_15m",
+    "equity_60m",
 )
+
+MIN_BAR_KINDS: tuple[str, ...] = ("equity_15m", "equity_60m")
+KIND_TO_FREQ: dict[str, str] = {"equity_15m": "15m", "equity_60m": "60m"}
 
 P0_KINDS: tuple[str, ...] = (
     "equity_1d",

@@ -1,14 +1,15 @@
 # risk_engine
 
 ## 名称
-风险引擎：事前限额、合规校验、Kill Switch；对 execution 拥有硬否决权。
+风险引擎：事前硬规则、Kill Switch；对 execution 拥有硬否决权。
 
 ## 生产数据与落库表
 
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
-| 风控决策 | `risk_decision` | 对 portfolio 做放行/否决时 |
-| Kill Switch 状态 | `kill_switch` | 开/关停机时 |
+| 风控决策 | `risk_decision` | `risk review`；同步写 `portfolio_target.status` |
+| Kill Switch | `kill_switch` | `risk kill --on/--off` |
+| 限额参数 | `risk_limits` | 迁移种子 `v1_default` |
 
 
 ## 本目录模块一览
@@ -21,25 +22,50 @@
 | backend（父） | `../README.md` | 总览 | 父目录 |
 | database | `../../database/README.md` | 风控/开关表 | 上游契约 |
 | portfolio_construct | `../portfolio_construct/README.md` | 目标持仓草稿 | 上游 |
-| security_master | `../security_master/README.md` | 标的合法性 | 协作 |
-| ledger | `../ledger/README.md` | 持仓资金 | 读风险暴露 |
-| execution | `../execution/README.md` | OMS | 下游（被否决则不可执行） |
+| security_master | `../security_master/README.md` | 标的合法性 | 协作（经库） |
+| ledger | `../ledger/README.md` | 持仓资金 | 读暴露（待接） |
+| execution | `../execution/README.md` | OMS | 下游（approved + kill off） |
 | ops_monitor | `../ops_monitor/README.md` | 告警 | 同级 |
-| api_gateway | `../api_gateway/README.md` | 人工 Kill Switch | 入口 |
+| orchestrator | `../orchestrator/README.md` | 日更 | `schedule` 审 draft |
+| api_gateway | `../api_gateway/README.md` | 人工 Kill Switch | 入口（HTTP `/v1/risk/kill`） |
 
 ## 边界
-- 做：校验草稿、写风控快照、标记 `approved`/`rejected`、维护 kill switch。
-- 不做：组合优化；柜台下单；在无审计情况下改限额。
+- 做：校验 draft、写 `risk_decision`、标记 portfolio `approved`/`rejected`、维护 kill switch。
+- 不做：组合优化；柜台下单；在无审计情况下改限额（改 `risk_limits` 需新迁移/种子）。
 
 ## 输入
-- `portfolio_id` 草稿、限额配置、账本暴露、kill switch 状态
+- `portfolio_id`（status=draft）、`risk_limits`、`kill_switch`
 
 ## 输出
-- 风控快照；可执行目标持仓状态；全局/账户停机开关
+- `risk_decision`；`portfolio_target.status` ∈ {approved, rejected}
+
+## 硬规则（v1_default）
+- 单票权重 / 持仓只数 / 总敞口 / Kill Switch
+- 整手校验用 `cost_params.lot_size`（默认 100）
+
+| code | 含义 |
+| --- | --- |
+| `KILL_SWITCH_ON` | GLOBAL 或账户 Kill Switch 开启 |
+| `MAX_SINGLE_WEIGHT` | 单票权重 > 15% |
+| `MAX_NAMES` / `MIN_NAMES` | 持仓只数越界 |
+| `MAX_GROSS_EXPOSURE` | invested/nav > 101% |
+| `CANNOT_BUY` | 目标股数>0 但 can_buy≠1 |
+| `LOT_SIZE` | 股数非整手（按 `cost_params.lot_size`） |
 
 ## 运行
-- 组合后强制关卡；下单前 execution 必读开关
+
+```bash
+cd backend
+python main.py risk review --portfolio pf_xxx
+python main.py risk review --drafts --as-of 2026-07-23
+python main.py risk kill --on --scope GLOBAL --reason halt
+python main.py risk kill --off --scope GLOBAL
+python main.py risk status
+python main.py risk list --status approved
+python -m risk_engine.selfcheck
+```
 
 ## 不变量
 - kill switch=on 或未 approved → execution 禁止新开仓
-- 否决原因落库可审计
+- 否决原因落库可审计（`breaches_json`）
+- 模块间不 import 业务内部实现；经库交接

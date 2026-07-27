@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 
 from data_ingest.alpha_announcement.models import AnnouncementRecord
-from data_ingest.alpha_announcement.timeutil import utc_now_iso
+from shared.timeutil import utc_now_iso
 from shared.db import get_conn
 
 

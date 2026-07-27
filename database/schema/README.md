@@ -49,6 +49,7 @@
 | raw_index_member | ref_data | data_ingest/core_ref (index_member) | security_master, research_lab, portfolio_construct | (index_symbol, symbol, trade_date, source) | P1；成分与权重 |
 | raw_special_treat | ref_data | data_ingest/core_ref (special_treat) | security_master, risk_engine, research_lab | (symbol, effective_date, treat_type, source) | P1；ST 等状态史 |
 | raw_equity_bar_1d | market_data | data_ingest/core_market (equity_1d) | data_process | (symbol, trade_date, source) | CORE |
+| raw_equity_bar_min | market_data | data_ingest/core_market (equity_15m/60m) | data_process | (symbol, bar_time, freq, source) | CORE 分钟；源窗较短，宜短窗增量 |
 | raw_adj_factor | market_data | data_ingest/core_market (adj_factor) | data_process | (symbol, trade_date, factor_type, source) | CORE；与日线同级 |
 | raw_suspend / raw_limit_board | market_data | data_ingest/core_market (suspend/limit) | data_process, backtest | (symbol, trade_date, event_type, source) | CORE |
 | raw_index_bar_1d | market_data | data_ingest/core_market (index_1d) | data_process, backtest | (index_symbol, trade_date, source) | CORE；基准 |
@@ -81,6 +82,9 @@
 | processed_equity_bar_1d | market_data | data_process (equity_1d) | data_quality, research_lab, backtest | (symbol, trade_date, factor_type) | 复权价/ret_1d/can_buy|sell；缺板时 limit_derived |
 | processed_index_bar_1d | market_data | data_process (index_1d) | data_quality, research_lab, backtest | (index_symbol, trade_date) | 指数收益 |
 | processed_fund_snapshot | market_data | data_process (fundamental_pit) | research_lab | (symbol, valid_from) | 基本面 PIT 区间；`publish_date`=`announce_date`；`valid_to` 可空 |
+| processed_tech_indicator_1d | market_data | data_process (tech_indicator) | research_lab, backtest | (symbol, trade_date, factor_type, indicator_code) | 日线技术指标；`category`=core\|momentum\|…；suite=core/full；有 bar 才算 |
+| processed_equity_bar_min | market_data | data_process (equity_15m/60m) | data_process tech_indicator | (symbol, bar_time, freq, factor_type) | 分钟复权 OHLCV；因子取当日 adj_factor |
+| processed_tech_indicator_min | market_data | data_process (tech_indicator --freq) | research_lab | (symbol, bar_time, freq, factor_type, indicator_code) | 分钟技术指标 |
 | processed_*（统称） | market_data | data_process | data_quality, research_lab, backtest | process_batch_id | 提交后可见 |
 | dq_run | oltp | data_quality | ops_monitor, orchestrator | dq_run_id | created→passed/failed |
 | dq_result | oltp | data_quality | orchestrator, research_lab, signal_prod, ops_monitor | (dq_run_id, rule_code) | 单规则 pass/fail |
@@ -90,13 +94,24 @@
 | research_run | oltp | research_lab | strategy_registry, ops_monitor | run_id | 计算/评估元数据；`meta_json` 含 IC 报告 |
 | research_factor_value | oltp | research_lab | backtest, strategy_registry | (factor_code, symbol, trade_date, universe_code) | 基线因子值；点时=trade_date；幂等 UPSERT |
 | research_* | oltp | research_lab | strategy_registry, backtest | run_id | 非 live |
-| strategy_version | oltp | strategy_registry | signal_prod, backtest | strategy_version | 状态机 |
-| signal_prod_* | oltp | signal_prod | portfolio_construct, backtest | signal_batch_id | 仅已晋升版本 |
-| portfolio_target | oltp | portfolio_construct | risk_engine | portfolio_id | draft→… |
-| risk_decision | oltp | risk_engine | execution | portfolio_id | approved/rejected |
-| kill_switch | oltp | risk_engine | execution | account/global | 下单前必读 |
-| order_event / fill_event | oltp | execution | ledger, ops_monitor | order_id / fill_id | 事件追加 |
-| ledger_entry / balance | oltp | ledger | portfolio_construct, risk_engine, ops_monitor | account_id | 分录过账 |
+| strategy_version | oltp | strategy_registry | signal_prod, backtest | strategy_version | 状态机 DRAFT→…→LIVE；同 code 至多一 LIVE |
+| strategy_transition | oltp | strategy_registry | ops_monitor, api_gateway | transition_id | 晋升/停用审计 |
+| signal_batch | oltp | signal_prod | portfolio_construct, ops_monitor | signal_batch_id | PAPER/LIVE 运行批次 |
+| signal_prod_weight | oltp | signal_prod | portfolio_construct, backtest | (strategy_version, trade_date, symbol) | 调仓日目标权重；幂等 |
+| portfolio_target | oltp | portfolio_construct | risk_engine, execution | portfolio_id | draft→approved/rejected→executed；`(version,as_of,account)` 活跃唯一 |
+| portfolio_target_position | oltp | portfolio_construct | risk_engine, execution | (portfolio_id, symbol) | 整手目标股数/市值 |
+| risk_decision | oltp | risk_engine | execution | decision_id | approved/rejected；同步 portfolio 状态 |
+| kill_switch | oltp | risk_engine | execution | scope_key | GLOBAL 或 account_id；下单前必读 |
+| risk_limits | ref_data | migrations 种子 | risk_engine | version | 单票/只数/敞口限额 |
+| execution_run | oltp | execution | ledger, ops_monitor | execution_id | 纸面 OMS；同 portfolio 至多一 committed / 一 running |
+| order_event | oltp | execution | ledger, ops_monitor | event_id / order_id | 委托事件追加 |
+| fill_event | oltp | execution | ledger, ops_monitor | fill_id | 成交；含佣金/印花税/滑点 |
+| ledger_account | oltp | ledger | portfolio_construct, risk_engine | account_id | 账户；种子 paper_default |
+| ledger_posting | oltp | ledger | ops_monitor | posting_id | 按 execution 幂等；分录与 committed 同事务 |
+| ledger_entry | oltp | ledger | ops_monitor | entry_id | 分录 |
+| ledger_balance | oltp | ledger | execution, portfolio_construct, risk_engine | (account_id, asset_type, symbol) | 现金/持仓 |
+| ledger_lot | oltp | ledger | execution, ops_monitor | lot_id | T+1 FIFO |
+| api_audit_log | oltp | api_gateway | ops_monitor | audit_id | 网关写操作审计 |
 | cost_params | ref_data | migrations 种子 | backtest, execution, ledger | version | 统一费用口径 |
 | backtest_run | oltp | backtest | frontend/backtest_view, research_lab, ops_monitor | run_id | running→committed/failed |
 | backtest_nav | oltp | backtest | frontend/backtest_view | (run_id, trade_date) | 日净值与基准 |

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import math
@@ -13,7 +13,7 @@ from data_ingest.alpha_fundamental.models import (
     FetchRequest,
 )
 from data_ingest.alpha_fundamental.sources.base import FundamentalSource
-from data_ingest.core_ref.sources._parse import as_float, as_str, col_by_keywords
+from data_ingest.ingest_common.parse import as_float, as_str, col_by_keywords
 
 logger = logging.getLogger(__name__)
 

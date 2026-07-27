@@ -29,6 +29,24 @@ from __future__ import annotations
   python main.py alpha_contract --kind win_bid --start 2026-07-01 --end 2026-07-25
   python main.py alpha_announcement --kind ann_by_category --category win_bid --start 2026-07-24 --end 2026-07-24
   python main.py alpha_relation --kind hot_relate --universe TOP100 --end 2026-07-25
+  python main.py strategy register --code FTN_MOM20 --kind FACTOR_TOP_N --factor MOM_20 --top-n 20 --rebalance-days 20
+  python main.py strategy promote --version sv_xxx --to BACKTESTED --backtest-run bt_xxx
+  python main.py strategy promote --version sv_xxx --to PAPER
+  python main.py strategy promote --version sv_xxx --to LIVE
+  python main.py signal run --version sv_xxx --start 2026-06-01 --end 2026-07-23
+  python main.py signal run --live --as-of 2026-07-23
+  python main.py portfolio build --version sv_xxx --as-of 2026-07-23 --nav 1000000
+  python main.py portfolio build --live --as-of 2026-07-23
+  python main.py risk review --portfolio pf_xxx
+  python main.py risk kill --on --scope GLOBAL --reason halt
+  python main.py risk status
+  python main.py execution run --portfolio pf_xxx
+  python main.py execution run --approved --as-of 2026-07-23
+  python main.py ledger post --execution ex_xxx
+  python main.py ledger post --unposted
+  python main.py ledger show --account paper_default
+  python main.py gateway --host 127.0.0.1 --port 8080
+  python main.py e2e
 """
 
 import argparse
@@ -132,6 +150,617 @@ def cmd_research(args: argparse.Namespace) -> int:
         if result.status != "committed":
             exit_code = 2
     return exit_code
+
+
+def cmd_strategy(args: argparse.Namespace) -> int:
+    from strategy_registry.models import PromoteRequest, RegisterRequest
+    from strategy_registry.service import StrategyRegistryService
+
+    svc = StrategyRegistryService()
+    action = args.strategy_action
+
+    if action == "register":
+        result = svc.register(
+            RegisterRequest(
+                strategy_code=args.code,
+                strategy_kind=args.kind,
+                params={
+                    "factor_code": args.factor,
+                    "top_n": int(args.top_n),
+                    "rebalance_days": int(args.rebalance_days),
+                    "universe_code": args.universe,
+                    "factor_type": args.factor_type,
+                },
+                research_run_id=args.research_run,
+                backtest_run_id=args.backtest_run,
+                note=args.note,
+            )
+        )
+        print(
+            f"status={result.status} version={result.strategy_version} "
+            f"code={result.strategy_code} to={result.to_status}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        return 0 if result.status == "ok" else 2
+
+    if action == "promote":
+        result = svc.promote(
+            PromoteRequest(
+                strategy_version=args.version,
+                to_status=args.to,
+                backtest_run_id=args.backtest_run,
+                reason=args.reason,
+                retire_previous_live=not args.no_retire_previous,
+            )
+        )
+        print(
+            f"status={result.status} version={result.strategy_version} "
+            f"code={result.strategy_code} {result.from_status}->{result.to_status}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        if result.meta.get("retired"):
+            print(f"retired={','.join(result.meta['retired'])}")
+        return 0 if result.status == "ok" else 2
+
+    if action == "retire":
+        result = svc.retire(strategy_version=args.version, reason=args.reason)
+        print(
+            f"status={result.status} version={result.strategy_version} "
+            f"{result.from_status}->{result.to_status}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        return 0 if result.status == "ok" else 2
+
+    if action == "list":
+        rows = svc.list(
+            status=args.status, strategy_code=args.code, limit=int(args.limit)
+        )
+        if not rows:
+            print("status=ok count=0")
+            return 0
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"version={r.strategy_version} code={r.strategy_code} "
+                f"kind={r.strategy_kind} status={r.status} "
+                f"factor={r.params.get('factor_code')} top_n={r.params.get('top_n')}"
+            )
+        return 0
+
+    if action == "show":
+        rec = svc.get(args.version)
+        if not rec:
+            print(f"status=failed message=not_found version={args.version}")
+            return 2
+        print(
+            f"status=ok version={rec.strategy_version} code={rec.strategy_code} "
+            f"kind={rec.strategy_kind} status_val={rec.status}"
+        )
+        print(f"params={rec.params}")
+        print(
+            f"research_run={rec.research_run_id} backtest_run={rec.backtest_run_id} "
+            f"hash={rec.artifact_hash}"
+        )
+        for t in svc.repo.list_transitions(rec.strategy_version):
+            print(
+                f"transition {t.get('from_status')}->{t.get('to_status')} "
+                f"at={t.get('created_at')} reason={t.get('reason')}"
+            )
+        return 0
+
+    print(f"status=invalid message=unknown action {action}")
+    return 2
+
+
+def cmd_signal(args: argparse.Namespace) -> int:
+    from signal_prod.models import SignalRunRequest
+    from signal_prod.service import SignalProdService
+
+    svc = SignalProdService()
+    action = args.signal_action
+
+    if action == "list":
+        rows = svc.repo.list_batches(
+            strategy_version=args.version, limit=int(args.limit)
+        )
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"batch={r.get('signal_batch_id')} version={r.get('strategy_version')} "
+                f"status={r.get('status')} rows={r.get('row_count')} "
+                f"{r.get('start_date')}..{r.get('end_date')}"
+            )
+        return 0
+
+    if action != "run":
+        print(f"status=invalid message=unknown action {action}")
+        return 2
+
+    as_of = getattr(args, "as_of", None)
+    start = args.start
+    end = args.end
+    if as_of and not (start and end):
+        start = end = as_of[:10]
+    if not (start and end):
+        print("status=invalid message=需要 --start/--end 或 --as-of")
+        return 2
+
+    require_dq = not args.no_dq_check
+    results = []
+    if args.live or args.paper:
+        statuses = set()
+        if args.live:
+            statuses.add("LIVE")
+        if args.paper:
+            statuses.add("PAPER")
+        results = svc.run_all_runnable(
+            start=start[:10],
+            end=end[:10],
+            as_of=as_of,
+            require_dq=require_dq,
+            job_id=args.job_id,
+            statuses=statuses,
+        )
+    elif args.version:
+        results = [
+            svc.run(
+                SignalRunRequest(
+                    strategy_version=args.version,
+                    start=start[:10],
+                    end=end[:10],
+                    as_of=as_of,
+                    require_dq=require_dq,
+                    job_id=args.job_id,
+                )
+            )
+        ]
+    else:
+        print("status=invalid message=需要 --version 或 --live/--paper")
+        return 2
+
+    exit_code = 0
+    for result in results:
+        print(
+            f"status={result.status} batch={result.signal_batch_id} "
+            f"version={result.strategy_version} code={result.strategy_code} "
+            f"rows={result.row_count}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        if result.status not in ("committed", "skipped"):
+            exit_code = 2
+    return exit_code
+
+
+def cmd_portfolio(args: argparse.Namespace) -> int:
+    from portfolio_construct.models import PortfolioBuildRequest
+    from portfolio_construct.service import PortfolioConstructService
+
+    svc = PortfolioConstructService()
+    action = args.portfolio_action
+
+    if action == "list":
+        rows = svc.repo.list_targets(
+            strategy_version=args.version,
+            account_id=args.account,
+            limit=int(args.limit),
+        )
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"portfolio={r.get('portfolio_id')} version={r.get('strategy_version')} "
+                f"as_of={r.get('as_of_date')} status={r.get('status')} "
+                f"rows={r.get('row_count')} nav={r.get('nav')}"
+            )
+        return 0
+
+    if action == "show":
+        head = svc.repo.get_target(args.portfolio)
+        if not head:
+            print(f"status=failed message=not_found portfolio={args.portfolio}")
+            return 2
+        print(
+            f"status=ok portfolio={head['portfolio_id']} "
+            f"version={head.get('strategy_version')} as_of={head.get('as_of_date')} "
+            f"status_val={head.get('status')} nav={head.get('nav')} "
+            f"invested={head.get('invested_value')} cash={head.get('cash_residual')}"
+        )
+        print(
+            f"signal_date={head.get('signal_trade_date')} "
+            f"signal_batch={head.get('signal_batch_id')} account={head.get('account_id')}"
+        )
+        for p in svc.repo.list_positions(args.portfolio):
+            print(
+                f"  {p.get('symbol')} w={p.get('target_weight'):.4f} "
+                f"shares={p.get('target_shares')} px={p.get('price')} "
+                f"value={p.get('target_value'):.2f}"
+            )
+        return 0
+
+    if action != "build":
+        print(f"status=invalid message=unknown action {action}")
+        return 2
+
+    as_of = (args.as_of or "")[:10]
+    if not as_of:
+        print("status=invalid message=需要 --as-of")
+        return 2
+
+    results = []
+    if args.live or args.paper:
+        statuses: set[str] = set()
+        if args.live:
+            statuses.add("LIVE")
+        if args.paper:
+            statuses.add("PAPER")
+        results = svc.build_all_runnable(
+            as_of=as_of,
+            nav=float(args.nav),
+            account_id=args.account,
+            cost_version=args.cost_version,
+            statuses=statuses,
+            job_id=args.job_id,
+            use_ledger_nav=not bool(getattr(args, "fixed_nav", False)),
+            force=bool(getattr(args, "force", False)),
+        )
+    elif args.version:
+        results = [
+            svc.build(
+                PortfolioBuildRequest(
+                    strategy_version=args.version,
+                    as_of=as_of,
+                    nav=float(args.nav),
+                    account_id=args.account,
+                    cost_version=args.cost_version,
+                    signal_batch_id=args.signal_batch,
+                    job_id=args.job_id,
+                    use_ledger_nav=not bool(getattr(args, "fixed_nav", False)),
+                    force=bool(getattr(args, "force", False)),
+                )
+            )
+        ]
+    else:
+        print("status=invalid message=需要 --version 或 --live/--paper")
+        return 2
+
+    exit_code = 0
+    for result in results:
+        print(
+            f"status={result.status} portfolio={result.portfolio_id} "
+            f"version={result.strategy_version} code={result.strategy_code} "
+            f"rows={result.row_count} invested={result.invested_value:.2f} "
+            f"cash={result.cash_residual:.2f}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        if result.status not in ("draft", "skipped"):
+            exit_code = 2
+    return exit_code
+
+
+def cmd_risk(args: argparse.Namespace) -> int:
+    from risk_engine.models import RiskReviewRequest
+    from risk_engine.service import RiskEngineService
+
+    svc = RiskEngineService()
+    action = args.risk_action
+
+    if action == "status":
+        rows = svc.repo.list_kill_switches()
+        print(f"status=ok kill_switches={len(rows)}")
+        for r in rows:
+            print(
+                f"scope={r.get('scope_key')} on={int(r.get('is_on') or 0)} "
+                f"reason={r.get('reason')} actor={r.get('actor')} "
+                f"at={r.get('updated_at')}"
+            )
+        return 0
+
+    if action == "kill":
+        if args.on == args.off:
+            print("status=invalid message=需要恰好其一: --on 或 --off")
+            return 2
+        sw = svc.set_kill(
+            scope_key=args.scope,
+            is_on=bool(args.on),
+            reason=args.reason,
+            actor=args.actor or "cli",
+        )
+        print(
+            f"status=ok scope={sw.get('scope_key')} on={int(sw.get('is_on') or 0)} "
+            f"reason={sw.get('reason')}"
+        )
+        return 0
+
+    if action == "list":
+        rows = svc.repo.list_decisions(
+            portfolio_id=args.portfolio,
+            status=args.status,
+            limit=int(args.limit),
+        )
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"decision={r.get('decision_id')} portfolio={r.get('portfolio_id')} "
+                f"status={r.get('status')} breaches={r.get('breach_count')} "
+                f"as_of={r.get('as_of_date')}"
+            )
+        return 0
+
+    if action == "show":
+        d = svc.repo.get_decision(args.decision)
+        if not d:
+            print(f"status=failed message=not_found decision={args.decision}")
+            return 2
+        print(
+            f"status=ok decision={d['decision_id']} portfolio={d.get('portfolio_id')} "
+            f"decision_status={d.get('status')} breaches={d.get('breach_count')} "
+            f"kill={d.get('kill_switch_on')}"
+        )
+        for b in d.get("breaches") or []:
+            print(
+                f"  breach code={b.get('code')} symbol={b.get('symbol')} "
+                f"msg={b.get('message')}"
+            )
+        return 0
+
+    if action != "review":
+        print(f"status=invalid message=unknown action {action}")
+        return 2
+
+    results = []
+    if args.drafts:
+        results = svc.review_drafts(
+            as_of=args.as_of,
+            account_id=args.account,
+            limits_version=args.limits_version,
+            actor=args.actor or "cli",
+            job_id=args.job_id,
+            force=bool(args.force),
+        )
+    elif args.portfolio:
+        results = [
+            svc.review(
+                RiskReviewRequest(
+                    portfolio_id=args.portfolio,
+                    limits_version=args.limits_version,
+                    actor=args.actor or "cli",
+                    job_id=args.job_id,
+                    force=bool(args.force),
+                )
+            )
+        ]
+    else:
+        print("status=invalid message=需要 --portfolio 或 --drafts")
+        return 2
+
+    exit_code = 0
+    for result in results:
+        print(
+            f"status={result.status} decision={result.decision_id} "
+            f"portfolio={result.portfolio_id} breaches={result.breach_count}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        for b in result.breaches[:10]:
+            print(
+                f"  breach code={b.get('code')} symbol={b.get('symbol')} "
+                f"msg={b.get('message')}"
+            )
+        if result.status not in ("approved", "skipped"):
+            # rejected 对 schedule 记为失败步，但不阻断 CORE
+            exit_code = 2
+    return exit_code
+
+
+def cmd_execution(args: argparse.Namespace) -> int:
+    from execution.models import ExecutionRequest
+    from execution.service import ExecutionService
+
+    svc = ExecutionService()
+    action = args.execution_action
+
+    if action == "list":
+        rows = svc.repo.list_runs(
+            portfolio_id=args.portfolio,
+            account_id=args.account,
+            limit=int(args.limit),
+        )
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"execution={r.get('execution_id')} portfolio={r.get('portfolio_id')} "
+                f"status={r.get('status')} orders={r.get('order_count')} "
+                f"fills={r.get('fill_count')} as_of={r.get('as_of_date')}"
+            )
+        return 0
+
+    if action == "show":
+        run = svc.repo.get_run(args.execution)
+        if not run:
+            print(f"status=failed message=not_found execution={args.execution}")
+            return 2
+        print(
+            f"status=ok execution={run['execution_id']} portfolio={run.get('portfolio_id')} "
+            f"run_status={run.get('status')} orders={run.get('order_count')} "
+            f"fills={run.get('fill_count')} adapter={run.get('adapter')}"
+        )
+        for o in svc.repo.list_orders(args.execution):
+            if o.get("event_type") == "NEW":
+                print(
+                    f"  order {o.get('order_id')} {o.get('side')} {o.get('symbol')} "
+                    f"qty={o.get('qty')} status={o.get('status')}"
+                )
+        for f in svc.repo.list_fills(args.execution):
+            print(
+                f"  fill {f.get('symbol')} {f.get('side')} qty={f.get('qty')} "
+                f"px={f.get('price')} amount={f.get('amount'):.2f} "
+                f"comm={f.get('commission'):.2f} tax={f.get('stamp_tax'):.2f}"
+            )
+        return 0
+
+    if action != "run":
+        print(f"status=invalid message=unknown action {action}")
+        return 2
+
+    results = []
+    if args.approved:
+        results = svc.run_approved(
+            as_of=args.as_of,
+            account_id=args.account,
+            cost_version=args.cost_version,
+            force=bool(args.force),
+            job_id=args.job_id,
+        )
+    elif args.portfolio:
+        results = [
+            svc.run(
+                ExecutionRequest(
+                    portfolio_id=args.portfolio,
+                    cost_version=args.cost_version,
+                    force=bool(args.force),
+                    job_id=args.job_id,
+                )
+            )
+        ]
+    else:
+        print("status=invalid message=需要 --portfolio 或 --approved")
+        return 2
+
+    exit_code = 0
+    for result in results:
+        print(
+            f"status={result.status} execution={result.execution_id} "
+            f"portfolio={result.portfolio_id} orders={result.order_count} "
+            f"fills={result.fill_count}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        if result.status not in ("committed", "skipped"):
+            exit_code = 2
+    return exit_code
+
+
+def cmd_ledger(args: argparse.Namespace) -> int:
+    from ledger.models import PostRequest
+    from ledger.service import LedgerService
+
+    svc = LedgerService()
+    action = args.ledger_action
+
+    if action == "ensure":
+        acct = svc.ensure_account(
+            account_id=args.account, opening_cash=float(args.opening_cash)
+        )
+        print(
+            f"status=ok account={acct.get('account_id')} "
+            f"opening_cash={acct.get('opening_cash')}"
+        )
+        return 0
+
+    if action == "show":
+        acct = svc.repo.get_account(args.account)
+        if not acct:
+            print(f"status=failed message=account_not_found account={args.account}")
+            return 2
+        cash = svc.repo.get_cash(args.account)
+        print(
+            f"status=ok account={args.account} opening={acct.get('opening_cash')} "
+            f"cash={cash:.4f}"
+        )
+        for p in svc.repo.list_positions(args.account):
+            print(f"  position {p.get('symbol')} shares={p.get('qty')}")
+        if args.as_of:
+            for r in svc.sellable_report(account_id=args.account, as_of=args.as_of):
+                print(
+                    f"  sellable {r['symbol']} shares={r['shares']} "
+                    f"sellable={r['sellable']} locked={r['locked']}"
+                )
+        return 0
+
+    if action == "sellable":
+        rows = svc.sellable_report(account_id=args.account, as_of=args.as_of)
+        print(f"status=ok account={args.account} as_of={args.as_of} count={len(rows)}")
+        for r in rows:
+            print(
+                f"  {r['symbol']} shares={r['shares']} sellable={r['sellable']} "
+                f"locked={r['locked']}"
+            )
+        return 0
+
+    if action == "list":
+        rows = svc.repo.list_postings(account_id=args.account, limit=int(args.limit))
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"posting={r.get('posting_id')} execution={r.get('execution_id')} "
+                f"status={r.get('status')} entries={r.get('entry_count')} "
+                f"cash_after={r.get('cash_after')}"
+            )
+        return 0
+
+    if action != "post":
+        print(f"status=invalid message=unknown action {action}")
+        return 2
+
+    results = []
+    if args.unposted:
+        results = svc.post_unposted(
+            account_id=args.account, job_id=args.job_id, limit=int(args.limit or 50)
+        )
+    elif args.execution:
+        results = [
+            svc.post(
+                PostRequest(
+                    execution_id=args.execution,
+                    account_id=args.account,
+                    job_id=args.job_id,
+                    force=bool(args.force),
+                )
+            )
+        ]
+    else:
+        print("status=invalid message=需要 --execution 或 --unposted")
+        return 2
+
+    exit_code = 0
+    for result in results:
+        print(
+            f"status={result.status} posting={result.posting_id} "
+            f"execution={result.execution_id} entries={result.entry_count} "
+            f"cash_after={result.cash_after:.4f}"
+        )
+        if result.message:
+            print(f"message={result.message}")
+        if result.status not in ("committed", "skipped"):
+            exit_code = 2
+    return exit_code
+
+
+def cmd_gateway(args: argparse.Namespace) -> int:
+    """启动 FastAPI 网关进程（开发机短时冒烟可用）。"""
+    try:
+        import uvicorn
+    except ImportError:
+        print("status=failed message=请 pip install fastapi uvicorn httpx")
+        return 2
+    from api_gateway.app import create_app
+
+    host = args.host
+    port = int(args.port)
+    print(f"status=starting gateway host={host} port={port} docs=http://{host}:{port}/docs")
+    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    return 0
+
+
+def cmd_e2e(_: argparse.Namespace) -> int:
+    """生产链路短窗 E2E（自备种子，不拉全市场）。"""
+    from e2e.prod_path import main as e2e_main
+
+    return int(e2e_main())
 
 
 def cmd_security_master(args: argparse.Namespace) -> int:
@@ -238,6 +867,24 @@ def cmd_data_process(args: argparse.Namespace) -> int:
     from data_process.service import DataProcessService
     from shared.universe_resolve import resolve_universe_symbols
 
+    if getattr(args, "list_tech_catalog", False):
+        from data_process.tech_catalog import catalog_summary, load_pandas_ta_kinds
+
+        summary = catalog_summary()
+        print(
+            f"suite_full_functions={summary['suite_full_functions']} "
+            f"note={summary['note']}"
+        )
+        for cat, n in summary["categories"].items():
+            print(f"category={cat} functions={n}")
+        if args.category:
+            kinds = load_pandas_ta_kinds(
+                categories=[c.strip() for c in args.category if c.strip()]
+            )
+            for k in kinds:
+                print(f"kind={k.kind} category={k.category}")
+        return 0
+
     symbols = [s.strip() for s in (args.symbol or []) if s.strip()]
     indexes = [s.strip() for s in (args.index or []) if s.strip()]
     if args.universe:
@@ -264,6 +911,11 @@ def cmd_data_process(args: argparse.Namespace) -> int:
         factor_type=args.factor_type,
         preferred_source=args.preferred_source,
         job_id=args.job_id,
+        force=bool(getattr(args, "force", False)),
+        chunk_size=int(getattr(args, "chunk_size", 100) or 100),
+        suite=str(getattr(args, "suite", "core") or "core"),
+        categories=[c.strip() for c in (getattr(args, "category", None) or []) if c.strip()],
+        freq=str(getattr(args, "freq", "1d") or "1d"),
     )
     try:
         if args.p0:
@@ -764,6 +1416,24 @@ def cmd_daily(args: argparse.Namespace) -> int:
         if r.status != "committed":
             failed += 1
         flow = FlowIngestService(source=get_flow_source("akshare"))
+        # 个股资金（FLOW_NET_5）；分块，失败计入但不中断其它 kind
+        for fr in flow.run_stock_flow_chunked(
+            FlowReq(
+                kind="stock_flow",
+                start=as_of,
+                end=as_of,
+                symbols=symbols,
+                job_id=args.job_id,
+            ),
+            chunk_size=20,
+        ):
+            results.append(fr)
+            print(
+                f"kind={fr.kind} status={fr.status} fetched={fr.fetched} "
+                f"batch_id={fr.batch_id}"
+            )
+            if fr.status != "committed":
+                failed += 1
         for kind in ("dragon_tiger", "dragon_tiger_seat", "block_trade"):
             r = flow.run(
                 FlowReq(kind=kind, start=as_of, end=as_of, symbols=[], job_id=args.job_id)  # type: ignore[arg-type]
@@ -773,9 +1443,10 @@ def cmd_daily(args: argparse.Namespace) -> int:
             if r.status != "committed":
                 failed += 1
 
-    # process + DQ
+    # process + 日线技术指标 + DQ
+    proc_svc = DataProcessService()
     try:
-        proc_results = DataProcessService().run_p0(
+        proc_results = proc_svc.run_p0(
             ProcessRequest(
                 kind="equity_1d",
                 start=as_of,
@@ -790,6 +1461,26 @@ def cmd_daily(args: argparse.Namespace) -> int:
             print(f"process kind={pr.kind} status={pr.status} output={pr.output_rows}")
             if pr.status != "committed":
                 failed += 1
+        # 短窗指标：只算本宇宙当日；不拉外部、不开 ALL_LISTED
+        ti = proc_svc.run(
+            ProcessRequest(
+                kind="tech_indicator",
+                start=as_of,
+                end=as_of,
+                symbols=symbols,
+                factor_type=args.factor_type,
+                job_id=args.job_id,
+                force=False,
+                chunk_size=100,
+                suite="core",
+            )
+        )
+        print(
+            f"process kind={ti.kind} status={ti.status} output={ti.output_rows} "
+            f"message={ti.message or '-'}"
+        )
+        if ti.status != "committed":
+            failed += 1
     except Exception as exc:  # noqa: BLE001
         print(f"process failed: {exc}")
         failed += 1
@@ -1265,6 +1956,8 @@ def build_parser() -> argparse.ArgumentParser:
             "market_rank",
             "abnormal_move",
             "board_1d",
+            "equity_15m",
+            "equity_60m",
         ],
     )
     p_mkt.add_argument(
@@ -1584,7 +2277,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_proc = sub.add_parser("data_process", help="运行数据处理（raw → processed）")
     p_proc.add_argument(
         "--kind",
-        choices=["equity_1d", "index_1d", "fundamental_pit"],
+        choices=[
+            "equity_1d",
+            "index_1d",
+            "fundamental_pit",
+            "tech_indicator",
+            "equity_15m",
+            "equity_60m",
+        ],
     )
     p_proc.add_argument(
         "--p0",
@@ -1608,6 +2308,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_proc.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
     p_proc.add_argument("--preferred-source", default="akshare")
+    p_proc.add_argument(
+        "--force",
+        action="store_true",
+        help="tech_indicator：重算已有指标（默认只补缺）",
+    )
+    p_proc.add_argument(
+        "--chunk-size",
+        type=int,
+        default=100,
+        help="tech_indicator：按标的分块大小（core 默认 100；full 上限 20）",
+    )
+    p_proc.add_argument(
+        "--suite",
+        default="core",
+        choices=["core", "full"],
+        help="tech_indicator：core=13 兼容码；full=pandas-ta 全部分类",
+    )
+    p_proc.add_argument(
+        "--freq",
+        default="1d",
+        choices=["1d", "15m", "60m"],
+        help="tech_indicator：K 线频率（分钟须先 process equity_15m/60m）",
+    )
+    p_proc.add_argument(
+        "--category",
+        action="append",
+        default=[],
+        help="tech_indicator suite=full 时限定分类（可重复）：momentum/overlap/trend/…",
+    )
+    p_proc.add_argument(
+        "--list-tech-catalog",
+        action="store_true",
+        help="打印技术指标分类目录后退出",
+    )
     p_proc.add_argument("--job-id", default=None)
     p_proc.set_defaults(func=cmd_data_process)
 
@@ -1744,7 +2478,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--factor",
         dest="research_factor",
         default=None,
-        choices=["MOM_20", "VAL_PE_PCT", "FLOW_NET_5"],
+        choices=[
+            "MOM_20",
+            "VAL_PE_PCT",
+            "FLOW_NET_5",
+            "TECH_RSI_14",
+            "TECH_MACD_HIST",
+            "TECH_MA20_BIAS",
+        ],
         help="FACTOR_TOP_N：使用的 research 因子代码",
     )
     p_bt.add_argument(
@@ -1765,8 +2506,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_rs.add_argument(
         "--factor",
         required=True,
-        choices=["MOM_20", "VAL_PE_PCT", "FLOW_NET_5", "ALL"],
-        help="基线因子；ALL=三个依次计算",
+        choices=[
+            "MOM_20",
+            "VAL_PE_PCT",
+            "FLOW_NET_5",
+            "TECH_RSI_14",
+            "TECH_MACD_HIST",
+            "TECH_MA20_BIAS",
+            "ALL",
+        ],
+        help="研究因子；ALL=全部依次计算（含 tech 派生）",
     )
     p_rs.add_argument("--start", required=True, help="YYYY-MM-DD")
     p_rs.add_argument("--end", required=True, help="YYYY-MM-DD")
@@ -1789,6 +2538,275 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_rs.add_argument("--job-id", default=None)
     p_rs.set_defaults(func=cmd_research)
+
+    p_st = sub.add_parser("strategy", help="策略版本注册 / 晋升 / 查询")
+    st_sub = p_st.add_subparsers(dest="strategy_action", required=True)
+
+    p_st_reg = st_sub.add_parser("register", help="登记 DRAFT 版本")
+    p_st_reg.add_argument("--code", required=True, help="策略代码，如 FTN_MOM20")
+    p_st_reg.add_argument(
+        "--kind", default="FACTOR_TOP_N", choices=["FACTOR_TOP_N"]
+    )
+    p_st_reg.add_argument(
+        "--factor",
+        required=True,
+        choices=[
+            "MOM_20",
+            "VAL_PE_PCT",
+            "FLOW_NET_5",
+            "TECH_RSI_14",
+            "TECH_MACD_HIST",
+            "TECH_MA20_BIAS",
+        ],
+    )
+    p_st_reg.add_argument("--top-n", type=int, default=20)
+    p_st_reg.add_argument("--rebalance-days", type=int, default=20)
+    p_st_reg.add_argument(
+        "--universe", default="TOP100", choices=list(UNIVERSE_CHOICES)
+    )
+    p_st_reg.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
+    p_st_reg.add_argument("--research-run", default=None)
+    p_st_reg.add_argument("--backtest-run", default=None)
+    p_st_reg.add_argument("--note", default=None)
+    p_st_reg.set_defaults(func=cmd_strategy)
+
+    p_st_pro = st_sub.add_parser("promote", help="状态迁移")
+    p_st_pro.add_argument("--version", required=True, help="strategy_version")
+    p_st_pro.add_argument(
+        "--to",
+        required=True,
+        choices=["BACKTESTED", "PAPER", "LIVE", "RETIRED"],
+    )
+    p_st_pro.add_argument(
+        "--backtest-run",
+        default=None,
+        help="晋升 BACKTESTED 时必填（committed 的 backtest_run）",
+    )
+    p_st_pro.add_argument("--reason", default=None)
+    p_st_pro.add_argument(
+        "--no-retire-previous",
+        action="store_true",
+        help="晋升 LIVE 时若已有同 code LIVE 则失败（默认自动停用旧版）",
+    )
+    p_st_pro.set_defaults(func=cmd_strategy)
+
+    p_st_ret = st_sub.add_parser("retire", help="停用版本")
+    p_st_ret.add_argument("--version", required=True)
+    p_st_ret.add_argument("--reason", default=None)
+    p_st_ret.set_defaults(func=cmd_strategy)
+
+    p_st_list = st_sub.add_parser("list", help="列出版本")
+    p_st_list.add_argument(
+        "--status",
+        default=None,
+        choices=["DRAFT", "BACKTESTED", "PAPER", "LIVE", "RETIRED"],
+    )
+    p_st_list.add_argument("--code", default=None)
+    p_st_list.add_argument("--limit", type=int, default=50)
+    p_st_list.set_defaults(func=cmd_strategy)
+
+    p_st_show = st_sub.add_parser("show", help="版本详情与审计轨迹")
+    p_st_show.add_argument("--version", required=True)
+    p_st_show.set_defaults(func=cmd_strategy)
+
+    p_sg = sub.add_parser("signal", help="已晋升策略生产信号")
+    sg_sub = p_sg.add_subparsers(dest="signal_action", required=True)
+
+    p_sg_run = sg_sub.add_parser("run", help="生成 signal_prod_weight")
+    p_sg_run.add_argument("--version", default=None, help="指定 strategy_version")
+    p_sg_run.add_argument(
+        "--live", action="store_true", help="运行全部 LIVE 版本"
+    )
+    p_sg_run.add_argument(
+        "--paper", action="store_true", help="运行全部 PAPER 版本"
+    )
+    p_sg_run.add_argument("--start", default=None, help="YYYY-MM-DD")
+    p_sg_run.add_argument("--end", default=None, help="YYYY-MM-DD")
+    p_sg_run.add_argument(
+        "--as-of",
+        default=None,
+        help="单日：等价 start=end=as_of（日更用）",
+    )
+    p_sg_run.add_argument(
+        "--no-dq-check",
+        action="store_true",
+        help="调试用：跳过 dq_gate 覆盖检查",
+    )
+    p_sg_run.add_argument("--job-id", default=None)
+    p_sg_run.set_defaults(func=cmd_signal)
+
+    p_sg_list = sg_sub.add_parser("list", help="列出 signal_batch")
+    p_sg_list.add_argument("--version", default=None)
+    p_sg_list.add_argument("--limit", type=int, default=20)
+    p_sg_list.set_defaults(func=cmd_signal)
+
+    p_pf = sub.add_parser("portfolio", help="生产信号 → 目标持仓草稿")
+    pf_sub = p_pf.add_subparsers(dest="portfolio_action", required=True)
+
+    p_pf_build = pf_sub.add_parser("build", help="构建 draft 目标持仓")
+    p_pf_build.add_argument("--version", default=None, help="strategy_version")
+    p_pf_build.add_argument("--live", action="store_true", help="全部 LIVE")
+    p_pf_build.add_argument("--paper", action="store_true", help="全部 PAPER")
+    p_pf_build.add_argument("--as-of", required=True, help="YYYY-MM-DD 点时日")
+    p_pf_build.add_argument("--nav", type=float, default=1_000_000.0, help="账户权益")
+    p_pf_build.add_argument("--account", default="paper_default")
+    p_pf_build.add_argument("--cost-version", default="v1_ashare_default")
+    p_pf_build.add_argument(
+        "--signal-batch",
+        default=None,
+        help="可选：指定 signal_batch_id；默认取 as_of 及之前最近调仓日",
+    )
+    p_pf_build.add_argument("--job-id", default=None)
+    p_pf_build.add_argument(
+        "--fixed-nav",
+        action="store_true",
+        help="使用 --nav 固定权益；默认按账本现金+持仓市值估算",
+    )
+    p_pf_build.add_argument(
+        "--force",
+        action="store_true",
+        help="同日已有活跃组合时仍尝试新建（可能撞唯一约束）",
+    )
+    p_pf_build.set_defaults(func=cmd_portfolio)
+
+    p_pf_list = pf_sub.add_parser("list", help="列出 portfolio_target")
+    p_pf_list.add_argument("--version", default=None)
+    p_pf_list.add_argument("--account", default=None)
+    p_pf_list.add_argument("--limit", type=int, default=20)
+    p_pf_list.set_defaults(func=cmd_portfolio)
+
+    p_pf_show = pf_sub.add_parser("show", help="草稿头 + 持仓明细")
+    p_pf_show.add_argument("--portfolio", required=True, help="portfolio_id")
+    p_pf_show.set_defaults(func=cmd_portfolio)
+
+    p_rk = sub.add_parser("risk", help="风控审核 / Kill Switch")
+    rk_sub = p_rk.add_subparsers(dest="risk_action", required=True)
+
+    p_rk_rev = rk_sub.add_parser("review", help="审核 portfolio draft")
+    p_rk_rev.add_argument("--portfolio", default=None, help="portfolio_id")
+    p_rk_rev.add_argument(
+        "--drafts",
+        action="store_true",
+        help="审核全部 draft（可加 --as-of 过滤）",
+    )
+    p_rk_rev.add_argument("--as-of", default=None, help="YYYY-MM-DD")
+    p_rk_rev.add_argument("--account", default=None)
+    p_rk_rev.add_argument("--limits-version", default="v1_default")
+    p_rk_rev.add_argument("--force", action="store_true", help="已审过也可重审")
+    p_rk_rev.add_argument("--actor", default="cli")
+    p_rk_rev.add_argument("--job-id", default=None)
+    p_rk_rev.set_defaults(func=cmd_risk)
+
+    p_rk_kill = rk_sub.add_parser("kill", help="开/关 Kill Switch")
+    p_rk_kill.add_argument("--on", action="store_true")
+    p_rk_kill.add_argument("--off", action="store_true")
+    p_rk_kill.add_argument(
+        "--scope",
+        default="GLOBAL",
+        help="GLOBAL 或 account_id（默认 GLOBAL）",
+    )
+    p_rk_kill.add_argument("--reason", default=None)
+    p_rk_kill.add_argument("--actor", default="cli")
+    p_rk_kill.set_defaults(func=cmd_risk)
+
+    p_rk_st = rk_sub.add_parser("status", help="查看 Kill Switch")
+    p_rk_st.set_defaults(func=cmd_risk)
+
+    p_rk_list = rk_sub.add_parser("list", help="列出 risk_decision")
+    p_rk_list.add_argument("--portfolio", default=None)
+    p_rk_list.add_argument(
+        "--status", default=None, choices=["approved", "rejected"]
+    )
+    p_rk_list.add_argument("--limit", type=int, default=20)
+    p_rk_list.set_defaults(func=cmd_risk)
+
+    p_rk_show = rk_sub.add_parser("show", help="决策详情")
+    p_rk_show.add_argument("--decision", required=True)
+    p_rk_show.set_defaults(func=cmd_risk)
+
+    p_ex = sub.add_parser("execution", help="纸面 OMS：订单/成交事件（不过账）")
+    ex_sub = p_ex.add_subparsers(dest="execution_action", required=True)
+
+    p_ex_run = ex_sub.add_parser("run", help="执行 approved 组合")
+    p_ex_run.add_argument("--portfolio", default=None)
+    p_ex_run.add_argument(
+        "--approved",
+        action="store_true",
+        help="执行全部 approved（可加 --as-of）",
+    )
+    p_ex_run.add_argument("--as-of", default=None)
+    p_ex_run.add_argument("--account", default=None)
+    p_ex_run.add_argument("--cost-version", default="v1_ashare_default")
+    p_ex_run.add_argument(
+        "--force",
+        action="store_true",
+        help="覆盖已有 committed（旧 run → superseded）",
+    )
+    p_ex_run.add_argument("--job-id", default=None)
+    p_ex_run.set_defaults(func=cmd_execution)
+
+    p_ex_list = ex_sub.add_parser("list", help="列出 execution_run")
+    p_ex_list.add_argument("--portfolio", default=None)
+    p_ex_list.add_argument("--account", default=None)
+    p_ex_list.add_argument("--limit", type=int, default=20)
+    p_ex_list.set_defaults(func=cmd_execution)
+
+    p_ex_show = ex_sub.add_parser("show", help="执行详情：订单与成交")
+    p_ex_show.add_argument("--execution", required=True)
+    p_ex_show.set_defaults(func=cmd_execution)
+
+    p_ld = sub.add_parser("ledger", help="成交过账 / 余额 / T+1 可卖")
+    ld_sub = p_ld.add_subparsers(dest="ledger_action", required=True)
+
+    p_ld_ens = ld_sub.add_parser("ensure", help="确保账户存在（含期初现金）")
+    p_ld_ens.add_argument("--account", default="paper_default")
+    p_ld_ens.add_argument("--opening-cash", type=float, default=1_000_000.0)
+    p_ld_ens.set_defaults(func=cmd_ledger)
+
+    p_ld_post = ld_sub.add_parser("post", help="过账 fill_event")
+    p_ld_post.add_argument("--execution", default=None)
+    p_ld_post.add_argument(
+        "--unposted",
+        action="store_true",
+        help="过账全部尚未落账的 committed execution",
+    )
+    p_ld_post.add_argument("--account", default=None)
+    p_ld_post.add_argument(
+        "--force",
+        action="store_true",
+        help="标记旧 posting 为 superseded 后重过账（会重复影响余额，慎用）",
+    )
+    p_ld_post.add_argument("--limit", type=int, default=50)
+    p_ld_post.add_argument("--job-id", default=None)
+    p_ld_post.set_defaults(func=cmd_ledger)
+
+    p_ld_show = ld_sub.add_parser("show", help="账户现金与持仓")
+    p_ld_show.add_argument("--account", default="paper_default")
+    p_ld_show.add_argument(
+        "--as-of", default=None, help="若给出则同时打印 T+1 可卖"
+    )
+    p_ld_show.set_defaults(func=cmd_ledger)
+
+    p_ld_sell = ld_sub.add_parser("sellable", help="T+1 可卖明细")
+    p_ld_sell.add_argument("--account", default="paper_default")
+    p_ld_sell.add_argument("--as-of", required=True)
+    p_ld_sell.set_defaults(func=cmd_ledger)
+
+    p_ld_list = ld_sub.add_parser("list", help="列出 ledger_posting")
+    p_ld_list.add_argument("--account", default=None)
+    p_ld_list.add_argument("--limit", type=int, default=20)
+    p_ld_list.set_defaults(func=cmd_ledger)
+
+    p_gw = sub.add_parser("gateway", help="启动 api_gateway（FastAPI）")
+    p_gw.add_argument("--host", default="127.0.0.1")
+    p_gw.add_argument("--port", type=int, default=8080)
+    p_gw.set_defaults(func=cmd_gateway)
+
+    p_e2e = sub.add_parser(
+        "e2e",
+        help="生产链路短窗回归（register→…→ledger→API；自备种子）",
+    )
+    p_e2e.set_defaults(func=cmd_e2e)
 
     return parser
 

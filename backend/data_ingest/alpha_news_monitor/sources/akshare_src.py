@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from data_ingest.alpha_announcement.timeutil import normalize_publish_time
+from shared.timeutil import normalize_publish_time
 from data_ingest.alpha_news_monitor.models import (
     FORUM_MEDIA,
     FORUM_MEDIA_DEFAULT,
@@ -17,7 +17,7 @@ from data_ingest.alpha_news_monitor.models import (
     NewsRecord,
 )
 from data_ingest.alpha_news_monitor.sources.base import FetchResult, NewsSource
-from data_ingest.core_ref.sources._parse import as_float, as_str, col_by_keywords
+from data_ingest.ingest_common.parse import as_float, as_str, col_by_keywords
 from shared.akshare_call import call_with_retry
 
 logger = logging.getLogger(__name__)

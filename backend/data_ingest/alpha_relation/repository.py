@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from data_ingest.alpha_announcement.timeutil import utc_now_iso
+from shared.timeutil import utc_now_iso
 from data_ingest.alpha_relation.models import FetchBundle, UpsertStats
 from shared.bulk_upsert import upsert_rows
 from shared.db import get_conn

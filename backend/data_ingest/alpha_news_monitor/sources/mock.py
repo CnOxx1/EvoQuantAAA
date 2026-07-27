@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
 from datetime import datetime, timezone
 
-from data_ingest.alpha_announcement.timeutil import normalize_publish_time
+from shared.timeutil import normalize_publish_time
 from data_ingest.alpha_news_monitor.models import FetchRequest, NewsRecord
 from data_ingest.alpha_news_monitor.sources.base import FetchResult, NewsSource
 

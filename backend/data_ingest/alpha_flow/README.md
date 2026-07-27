@@ -21,7 +21,7 @@
 | ingest_kind | 优先级 | 输出表 | 量化用途 |
 | --- | --- | --- | --- |
 | `northbound` | P1 | `raw_money_flow` | 北向类因子（`NORTHBOUND`/`_SH`/`_SZ`） |
-| `stock_flow` | P1 | `raw_money_flow` | 个股资金（`STOCK_FLOW` / 回退 `STOCK_NORTHBOUND`） |
+| `stock_flow` | P1 | `raw_money_flow` | 个股资金（`STOCK_FLOW` / 回退 `STOCK_NORTHBOUND`）；**schedule / daily --with-alpha 日更分块** |
 | `margin` | P2 | `raw_margin` | 融资融券余额/标的 |
 | `dragon_tiger` | P2 | `raw_dragon_tiger` | 龙虎榜个股上榜 |
 | `dragon_tiger_seat` | P2 | `raw_dragon_tiger_seat` | 每日活跃营业部净买 |

@@ -18,6 +18,7 @@
 | --- | --- | --- |
 | shared | `shared/` | 无业务编排的共享工具与类型 |
 | api_gateway | `api_gateway/` | 对外 BFF/API：鉴权、聚合、统一错误码 |
+| e2e | `e2e/` | 生产链路短窗回归（自备种子） |
 | orchestrator | `orchestrator/` | 任务 DAG/定时，只传引用 ID |
 | security_master | `security_master/` | 证券主数据与 Universe 快照 |
 | data_ingest | `data_ingest/` | 量化导向：CORE(ref+market) / ALPHA(基本面·资金·文本) |
@@ -78,6 +79,20 @@ python main.py data_quality --scope CORE --universe TOP100 --start 2023-01-01 --
   --factor-type qfq --index 000300
 python main.py backtest --universe TOP100 --start 2023-01-01 --end 2026-07-23 \
   --strategy EW_HOLD --factor-type qfq
+
+# 策略晋升 → 生产信号 → 组合草稿（短窗冒烟；晋升前先有 committed backtest_run）
+python main.py strategy register --code FTN_MOM20 --kind FACTOR_TOP_N \
+  --factor MOM_20 --top-n 20 --rebalance-days 20
+python main.py signal run --live --as-of 2026-07-23
+python main.py portfolio build --live --as-of 2026-07-23 --nav 1000000
+python main.py risk review --drafts --as-of 2026-07-23
+python main.py risk status
+python main.py execution run --approved --as-of 2026-07-23
+python main.py execution show --execution ex_xxx
+python main.py ledger post --unposted --account paper_default
+python main.py ledger show --account paper_default --as-of 2026-07-24
+python main.py gateway --host 127.0.0.1 --port 8080
+python main.py e2e
 
 # 停牌/涨跌停长窗、交易日增量、估值等见 data_ingest/README
 python main.py core_market --kind suspend --start 2023-01-01 --end 2026-07-23 \

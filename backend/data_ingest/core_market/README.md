@@ -35,7 +35,14 @@
 | `market_rank` | P1 | `raw_market_rank_1d` | 涨跌幅/量额/换手/人气榜 |
 | `abnormal_move` | P1 | `raw_abnormal_move` | 盘口异动（火箭发射/大笔买卖等） |
 | `board_1d` | P1 | `raw_board_bar_1d` | 行业/概念板块日线（轮动） |
-| `equity_1m` | P2 | （未实现） | 日内 |
+| `equity_15m` | P2 | `raw_equity_bar_min` (freq=15m) | 15 分钟 K；东财 hist_min_em，回退新浪 minute |
+| `equity_60m` | P2 | `raw_equity_bar_min` (freq=60m) | 60 分钟 K；同上 |
+
+### 分钟 K 说明（15m / 60m）
+
+- **链路**：`core_market equity_15m|60m` → `data_process equity_15m|60m`（当日 `adj_factor` 复权）→ 可选 `tech_indicator --freq 15m|60m`
+- **源限制**：公开接口通常只给**近若干交易日**分钟窗；本机只做短窗少标的，禁止 ALL_LISTED 长回填
+- **不进日更 schedule 默认路径**（避免拉爆）；按需 CLI
 
 ## 协作模块索引（供 AI Agent）
 
@@ -67,6 +74,12 @@ python main.py migrate
 
 # 短窗冒烟
 python main.py core_market --p0 --start 2026-07-21 --end 2026-07-23 --symbol 600000 --symbol 000001 --index 000300
+
+# 分钟 K（短窗；建议先 mock 自检，再 akshare）
+python main.py core_market --kind equity_15m --source mock --symbol 600000 --start 2026-07-21 --end 2026-07-23
+python main.py core_market --kind equity_60m --symbol 600000 --start 2026-07-21 --end 2026-07-23
+python main.py data_process --kind equity_15m --symbol 600000 --start 2026-07-21 --end 2026-07-23
+python main.py data_process --kind tech_indicator --freq 15m --suite core --symbol 600000 --start 2026-07-21 --end 2026-07-23 --force
 
 # 长窗推荐：TOP100 日线+复权（--min-bars 避免「已有少量日线就跳过」）
 python main.py core_market --p0 --universe TOP100 --start 2023-01-01 --end 2026-07-23 \

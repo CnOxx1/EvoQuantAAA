@@ -14,11 +14,18 @@
 
 ## 任务序列（`schedule`）
 
-1. `daily`（CORE 行情→process→CORE DQ）— **失败则中止本轮**
+1. `daily`（CORE 行情→process→**tech_indicator 短窗**→CORE DQ）— **失败则中止本轮**；指标只算本轮 `universe`（默认 TOP100），永不 ALL_LISTED
 2. `security_master --p0`（TOP100 / SECTOR_LEADERS 日快照）
-3. ALPHA：`news_official` / `news_policy` / `valuation`
+3. ALPHA：`news_official` / `news_policy` / `valuation` / **`stock_flow`（分块）**
 4. `data_quality --scope ALPHA`（仅报告，不写 gate）
-5. `ops_monitor.notify` 汇总本轮 failed 并落 `ops_alert`
+5. **`signal run --live --as-of`**（无 LIVE 或非调仓日 → skipped；失败不阻断 CORE）
+6. **`portfolio build --live --as-of`**（账本 NAV；同日幂等 skipped）
+7. **`risk review --drafts --as-of`**（硬规则放行/否决；kill on 必拒）
+8. **`execution run --approved --as-of`**（账本差额成交；无 approved → skipped）
+9. **`ledger post --unposted`**（原子过账；幂等 skipped）
+10. `ops_monitor.notify` 汇总本轮 failed 并落 `ops_alert`
+
+说明：`stock_flow` 供 `FLOW_NET_5` 研究保鲜；ALPHA 失败不阻断 CORE。交易步骤（signal→ledger）失败时整轮 `status=degraded`（CORE 仍 ok）。分钟 K 不进 schedule。
 
 ## 运行
 
@@ -36,7 +43,7 @@ python main.py schedule --at 18:30 --universe TOP100
 ```
 
 ## 边界
-- 做：顺序触发；记录步骤状态；CORE 失败中止；ALPHA 失败继续。
+- 做：顺序触发；记录步骤状态；CORE 失败中止；ALPHA 失败继续；交易步骤失败 → `degraded`。
 - 不做：Airflow；业务计算；替代各模块 CLI。
 
 ## 不变量

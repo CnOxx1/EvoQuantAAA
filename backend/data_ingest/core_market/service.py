@@ -17,7 +17,9 @@ from shared.ingest_batching import (
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "core_market"
-_SYMBOL_KINDS = frozenset({"equity_1d", "adj_factor", "corp_action"})
+_SYMBOL_KINDS = frozenset(
+    {"equity_1d", "adj_factor", "corp_action", "equity_15m", "equity_60m"}
+)
 _RANGE_KINDS = frozenset(
     {
         "equity_1d",
@@ -29,6 +31,8 @@ _RANGE_KINDS = frozenset(
         "market_rank",
         "abnormal_move",
         "board_1d",
+        "equity_15m",
+        "equity_60m",
     }
 )
 _DATE_CHUNK_KINDS = frozenset(

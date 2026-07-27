@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import time
@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from data_ingest.core_ref.models import FetchBundle, FetchRequest
-from data_ingest.core_ref.sources._parse import (
+from data_ingest.ingest_common.parse import (
     as_float,
     as_str,
     board_from_code,

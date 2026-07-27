@@ -21,6 +21,7 @@
 | `ingest_batching.py` | `chunk_symbols` / `chunk_date_ranges` / `missing_date_ranges` / Universe 参数解析 |
 | `bulk_upsert.py` | 通用分块 UPSERT（大包 executemany，小包 EXISTS 统计） |
 | `akshare_call.py` | Akshare/HTTP 统一重试、退避、失败降噪 |
+| `timeutil.py` | UTC ISO / `normalize_publish_time`（原 announcement 内工具上收） |
 
 ## 协作模块索引（供 AI Agent）
 

@@ -42,7 +42,17 @@
 - UI；经 gateway 的命令（只含引用与标量）
 
 ## 运行
-- 待定；禁止配置业务库连接串
+
+```bash
+# 终端 1：网关
+cd backend && python main.py gateway --port 8080
+# 终端 2：console 静态页
+cd frontend/console && python -m http.server 8081
+# 浏览器打开 http://127.0.0.1:8081
+```
+
+- 禁止配置业务库连接串
+- 网关已对本地静态源放开 CORS（含 `file://` 的 `null` origin）
 
 ## 不变量
 - 业务真相以 API/库为准，不以前端缓存为准

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -10,7 +10,7 @@ from typing import Any
 
 from data_ingest.alpha_flow.models import FetchBundle, FetchRequest
 from data_ingest.alpha_flow.sources.base import FlowSource
-from data_ingest.core_ref.sources._parse import as_float, as_str, col_by_keywords
+from data_ingest.ingest_common.parse import as_float, as_str, col_by_keywords
 
 logger = logging.getLogger(__name__)
 

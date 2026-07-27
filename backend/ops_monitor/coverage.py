@@ -16,7 +16,10 @@ _TABLES: tuple[tuple[str, str, str, str | None], ...] = (
     ("limit", "raw_limit_board", "trade_date", "symbol"),
     ("index_1d", "raw_index_bar_1d", "trade_date", None),
     ("valuation", "raw_valuation_1d", "trade_date", "symbol"),
-    ("money_flow", "raw_money_flow", "trade_date", None),
+    ("money_flow", "raw_money_flow", "trade_date", "scope"),
+    ("news", "raw_news_media", "publish_time", "symbol"),
+    ("tech_1d", "processed_tech_indicator_1d", "trade_date", "symbol"),
+    ("equity_min", "raw_equity_bar_min", "bar_time", "symbol"),
 )
 
 

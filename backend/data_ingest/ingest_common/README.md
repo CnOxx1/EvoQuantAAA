@@ -13,6 +13,11 @@ ingest 基建：batch 生命周期、幂等写、`ingest_module`/`ingest_kind`�
 ## 本目录模块一览
 无子模块；仅供 `data_ingest` 内引用。
 
+| 文件 | 作用 |
+| --- | --- |
+| `batch.py` | ingest_batch 生命周期 |
+| `parse.py` | 源解析辅助（`as_str` / `as_float` / `col_by_keywords` 等；原 core_ref `_parse` 上收） |
+
 ## 协作模块索引（供 AI Agent）
 
 | 模块 | README | 主要作用 | 与本模块关系 |
