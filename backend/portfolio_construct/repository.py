@@ -152,7 +152,7 @@ class PortfolioRepository:
         as_of: str,
         factor_type: str = "qfq",
     ) -> float:
-        """现金 + 持仓市值（点时最近 adj_close）；无账本则回退 opening_cash。"""
+        """现金 + 持仓市值（点时最近未复权 close）；无账本则回退 opening_cash。"""
         with get_conn() as conn:
             cash_row = conn.execute(
                 """
@@ -187,11 +187,40 @@ class PortfolioRepository:
         equity = cash
         for r in pos_rows:
             sym = str(r["symbol"])
-            px = bars.get(sym, {}).get("adj_close")
+            b = bars.get(sym) or {}
+            px = b.get("close") if b.get("close") is not None else b.get("adj_close")
             if px is None:
                 continue
             equity += float(r["qty"]) * float(px)
         return equity
+
+    def load_capital_weights(
+        self, *, account_id: str, strategy_versions: list[str]
+    ) -> dict[str, float]:
+        """返回 strategy_version → capital_weight；缺省等权。"""
+        if not strategy_versions:
+            return {}
+        with get_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT strategy_version, capital_weight
+                FROM strategy_capital_alloc
+                WHERE account_id=? AND strategy_version IN ({_ph(len(strategy_versions))})
+                """,
+                (account_id, *strategy_versions),
+            ).fetchall()
+        found = {str(r["strategy_version"]): float(r["capital_weight"]) for r in rows}
+        missing = [v for v in strategy_versions if v not in found]
+        if missing:
+            eq = 1.0 / len(strategy_versions)
+            for v in strategy_versions:
+                found.setdefault(v, eq)
+        # 归一到合计 1（若登记权重和>0）
+        total = sum(max(0.0, w) for w in found.values())
+        if total <= 0:
+            eq = 1.0 / len(strategy_versions)
+            return {v: eq for v in strategy_versions}
+        return {v: max(0.0, found[v]) / total for v in strategy_versions}
 
     def load_bars_as_of(
         self,
@@ -208,7 +237,7 @@ class PortfolioRepository:
 
         start = (date.fromisoformat(as_of[:10]) - timedelta(days=60)).isoformat()
         sql = f"""
-            SELECT symbol, trade_date, adj_close, can_buy, can_sell
+            SELECT symbol, trade_date, close, adj_close, can_buy, can_sell
             FROM processed_equity_bar_1d
             WHERE factor_type=? AND trade_date>=? AND trade_date<=?
               AND symbol IN ({_ph(len(symbols))})
@@ -304,8 +333,8 @@ class PortfolioRepository:
         sql = """
             INSERT INTO portfolio_target_position (
                 portfolio_id, symbol, target_weight, target_value, target_shares,
-                price, signal_value, signal_weight, can_buy, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                price, signal_value, signal_weight, can_buy, can_sell, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (portfolio_id, symbol) DO UPDATE SET
                 target_weight=EXCLUDED.target_weight,
                 target_value=EXCLUDED.target_value,
@@ -314,6 +343,7 @@ class PortfolioRepository:
                 signal_value=EXCLUDED.signal_value,
                 signal_weight=EXCLUDED.signal_weight,
                 can_buy=EXCLUDED.can_buy,
+                can_sell=EXCLUDED.can_sell,
                 status=EXCLUDED.status,
                 created_at=EXCLUDED.created_at
         """
@@ -328,6 +358,7 @@ class PortfolioRepository:
                 None if r.get("signal_value") is None else float(r["signal_value"]),
                 None if r.get("signal_weight") is None else float(r["signal_weight"]),
                 int(r.get("can_buy") if r.get("can_buy") is not None else 1),
+                int(r.get("can_sell") if r.get("can_sell") is not None else 1),
                 str(r.get("status") or "draft"),
                 created_at,
             )

@@ -36,17 +36,20 @@ def size_positions(
     nav: float,
     lot_size: int = 100,
     drop_cannot_buy: bool = True,
+    can_sell: dict[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     将信号权重转为目标股数。
     - drop_cannot_buy：can_buy!=1 的标的剔除后重归一
     - 缺价剔除后重归一
+    - 成交价应为未复权 close（由上游 prices 保证）
     返回 (positions, meta)
     """
     if nav <= 0:
         raise ValueError("nav 必须 > 0")
     if lot_size <= 0:
         raise ValueError("lot_size 必须 > 0")
+    sell_map = can_sell or {}
 
     candidates: list[dict[str, Any]] = []
     dropped_no_price = 0
@@ -72,6 +75,7 @@ def size_positions(
                 "signal_value": r.get("signal_value"),
                 "price": float(px),
                 "can_buy": cb,
+                "can_sell": int(sell_map[sym]) if sym in sell_map else 1,
             }
         )
 
@@ -95,6 +99,9 @@ def size_positions(
                 "signal_value": r.get("signal_value"),
                 "signal_weight": float(r.get("signal_weight") or tw),
                 "can_buy": int(r.get("can_buy") or 1),
+                "can_sell": int(
+                    r.get("can_sell") if r.get("can_sell") is not None else 1
+                ),
                 "status": "draft",
             }
         )
@@ -106,5 +113,6 @@ def size_positions(
         "invested_value": invested,
         "cash_residual": max(0.0, nav - invested),
         "lot_size": lot_size,
+        "pricing": "unadjusted_close",
     }
     return positions, meta

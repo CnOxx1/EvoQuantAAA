@@ -109,7 +109,9 @@ def run_once(
     if code != 0:
         result.status = "failed"
         result.message = "CORE daily failed; abort round"
-        _finalize_alerts(jid, day, started)
+        _finalize_alerts(
+            jid, day, started, schedule_status="failed", message=result.message
+        )
         print(f"status=failed job_id={jid} message={result.message}")
         return result
 
@@ -125,6 +127,9 @@ def run_once(
         job_id=jid,
     )
     _safe_call(lambda: int(main.cmd_security_master(sm_ns)), "security_master", result)
+    sm_failed = any(
+        s.name == "security_master" and s.status == "failed" for s in result.steps
+    )
 
     # --- 3. ALPHA 增量：news_official / news_policy / valuation ---
     _run_alpha_incremental(day, universe, jid, result)
@@ -143,102 +148,161 @@ def run_once(
     )
     _safe_call(lambda: int(main.cmd_data_quality(dq_ns)), "alpha_dq", result)
 
-    # --- 5. 生产信号（仅 LIVE；失败不阻断 CORE）---
-    sg_ns = Namespace(
-        signal_action="run",
-        version=None,
-        live=True,
-        paper=False,
-        start=day,
-        end=day,
-        as_of=day,
-        no_dq_check=False,
-        job_id=jid,
-    )
-    _safe_call(lambda: int(main.cmd_signal(sg_ns)), "signal_live", result)
-
-    # --- 6. 组合草稿（仅 LIVE；无信号则 skipped；失败不阻断 CORE）---
-    pf_ns = Namespace(
-        portfolio_action="build",
-        version=None,
-        live=True,
-        paper=False,
-        as_of=day,
-        nav=1_000_000.0,
-        account="paper_default",
-        cost_version="v1_ashare_default",
-        signal_batch=None,
-        job_id=jid,
-        fixed_nav=False,
-        force=False,
-    )
-    _safe_call(lambda: int(main.cmd_portfolio(pf_ns)), "portfolio_live", result)
-
-    # --- 7. 风控审核 draft（失败/否决不阻断 CORE）---
-    rk_ns = Namespace(
-        risk_action="review",
-        portfolio=None,
-        drafts=True,
-        as_of=day,
-        account="paper_default",
-        limits_version="v1_default",
-        force=False,
-        actor="schedule",
-        job_id=jid,
-    )
-    _safe_call(lambda: int(main.cmd_risk(rk_ns)), "risk_review", result)
-
-    # --- 8. 纸面执行 approved（失败/阻断不阻断 CORE）---
-    ex_ns = Namespace(
-        execution_action="run",
-        portfolio=None,
-        approved=True,
-        as_of=day,
-        account="paper_default",
-        cost_version="v1_ashare_default",
-        force=False,
-        job_id=jid,
-    )
-    _safe_call(lambda: int(main.cmd_execution(ex_ns)), "execution_paper", result)
-
-    # --- 9. 账本过账（未过账 execution；失败不阻断 CORE）---
-    ld_ns = Namespace(
-        ledger_action="post",
-        execution=None,
-        unposted=True,
-        account="paper_default",
-        force=False,
-        limit=50,
-        job_id=jid,
-    )
-    _safe_call(lambda: int(main.cmd_ledger(ld_ns)), "ledger_post", result)
-
-    # --- 10. 告警汇总 ---
-    _finalize_alerts(jid, day, started)
-
-    failed_coreish = any(
-        s.name == "daily" and s.status == "failed" for s in result.steps
-    )
-    trading_names = {
+    trading_names = (
+        "factor_refresh",
         "signal_live",
         "portfolio_live",
         "risk_review",
         "execution_paper",
         "ledger_post",
-    }
-    trading_fails = sum(
-        1 for s in result.steps if s.name in trading_names and s.status == "failed"
     )
+    if sm_failed:
+        # Universe 陈旧时禁止跑交易链
+        for name in trading_names:
+            result.steps.append(
+                StepResult(
+                    name=name,
+                    status="skipped",
+                    message="skipped: security_master failed",
+                )
+            )
+        print("trading steps skipped due to security_master failure")
+        factor_failed = False
+    else:
+        # --- 4b. LIVE 因子当日刷新（signal 前必须）---
+        factor_failed = not _refresh_live_factors(day, jid, result)
+        if factor_failed:
+            for name in trading_names:
+                if name == "factor_refresh":
+                    continue
+                result.steps.append(
+                    StepResult(
+                        name=name,
+                        status="skipped",
+                        message="skipped: factor_refresh failed",
+                    )
+                )
+            print("trading steps skipped due to factor_refresh failure")
+        else:
+            # --- 5. 生产信号（仅 LIVE）---
+            sg_ns = Namespace(
+                signal_action="run",
+                version=None,
+                live=True,
+                paper=False,
+                start=day,
+                end=day,
+                as_of=day,
+                no_dq_check=False,
+                job_id=jid,
+            )
+            sg_code = _safe_call(
+                lambda: int(main.cmd_signal(sg_ns)), "signal_live", result
+            )
+            signal_failed = sg_code is None or sg_code != 0
+            # signal skipped（非调仓）也是 exit 0；仅 failed 短路
+            if signal_failed:
+                for name in (
+                    "portfolio_live",
+                    "risk_review",
+                    "execution_paper",
+                    "ledger_post",
+                ):
+                    result.steps.append(
+                        StepResult(
+                            name=name,
+                            status="skipped",
+                            message="skipped: signal_live failed",
+                        )
+                    )
+                print("trading steps skipped due to signal_live failure")
+            else:
+                # --- 6. 组合草稿（仅 LIVE；非调仓日 hold skipped）---
+                pf_ns = Namespace(
+                    portfolio_action="build",
+                    version=None,
+                    live=True,
+                    paper=False,
+                    as_of=day,
+                    nav=1_000_000.0,
+                    account="paper_default",
+                    cost_version="v1_ashare_default",
+                    signal_batch=None,
+                    job_id=jid,
+                    fixed_nav=False,
+                    force=False,
+                )
+                _safe_call(
+                    lambda: int(main.cmd_portfolio(pf_ns)), "portfolio_live", result
+                )
+
+                # --- 7. 风控审核 draft ---
+                rk_ns = Namespace(
+                    risk_action="review",
+                    portfolio=None,
+                    drafts=True,
+                    as_of=day,
+                    account="paper_default",
+                    limits_version="v1_default",
+                    force=False,
+                    actor="schedule",
+                    job_id=jid,
+                )
+                _safe_call(lambda: int(main.cmd_risk(rk_ns)), "risk_review", result)
+
+                # --- 8. 纸面执行 approved（CLI 内每单立即过账）---
+                ex_ns = Namespace(
+                    execution_action="run",
+                    portfolio=None,
+                    approved=True,
+                    as_of=day,
+                    account="paper_default",
+                    cost_version="v1_ashare_default",
+                    force=False,
+                    job_id=jid,
+                )
+                _safe_call(
+                    lambda: int(main.cmd_execution(ex_ns)), "execution_paper", result
+                )
+
+                # --- 9. 账本过账（兜底未过账）---
+                ld_ns = Namespace(
+                    ledger_action="post",
+                    execution=None,
+                    unposted=True,
+                    account="paper_default",
+                    force=False,
+                    limit=50,
+                    job_id=jid,
+                )
+                _safe_call(lambda: int(main.cmd_ledger(ld_ns)), "ledger_post", result)
+
+    # --- 10. 告警汇总 ---
+    failed_coreish = any(
+        s.name == "daily" and s.status == "failed" for s in result.steps
+    )
+    trading_set = set(trading_names)
+    trading_fails = sum(
+        1 for s in result.steps if s.name in trading_set and s.status == "failed"
+    )
+    trading_skipped_gate = sm_failed or factor_failed
     alpha_fails = sum(
         1
         for s in result.steps
-        if s.name not in ({"daily"} | trading_names) and s.status == "failed"
+        if s.name not in ({"daily", "security_master"} | trading_set)
+        and s.status == "failed"
     )
     if failed_coreish:
         result.status = "failed"
-    elif trading_fails:
+    elif trading_fails or trading_skipped_gate:
         result.status = "degraded"
-        parts = [f"trading_fails={trading_fails}"]
+        parts: list[str] = []
+        if sm_failed:
+            parts.append("trading_skipped=security_master")
+        if factor_failed:
+            parts.append("trading_skipped=factor_refresh")
+        if trading_fails:
+            parts.append(f"trading_fails={trading_fails}")
         if alpha_fails:
             parts.append(f"alpha_fails={alpha_fails}")
         result.message = "; ".join(parts) + " (CORE ok)"
@@ -248,11 +312,111 @@ def run_once(
     else:
         result.status = "committed"
 
+    _finalize_alerts(jid, day, started, schedule_status=result.status, message=result.message)
+
     print(
         f"status={result.status} job_id={jid} as_of={day} "
         f"steps={len(result.steps)} message={result.message or '-'}"
     )
     return result
+
+
+def _refresh_live_factors(day: str, job_id: str, result: ScheduleResult) -> bool:
+    """
+    按 LIVE 策略的 (factor_code, universe, factor_type) 刷新 research_factor_value。
+    无 LIVE → ok；任一刷新失败 → False（跳过交易链）。
+    """
+    import json
+
+    from research_lab.models import FACTOR_CODES, ResearchRequest
+    from research_lab.service import ResearchService
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT strategy_version, params_json
+            FROM strategy_version
+            WHERE status='LIVE'
+            """
+        ).fetchall()
+
+    specs: dict[tuple[str, str, str], str] = {}
+    for row in rows:
+        try:
+            params = json.loads(str(row["params_json"] or "{}"))
+        except json.JSONDecodeError:
+            params = {}
+        fc = str(params.get("factor_code") or "").strip()
+        if not fc:
+            continue
+        uc = str(params.get("universe_code") or "TOP100")
+        ft = str(params.get("factor_type") or "qfq")
+        specs[(fc, uc, ft)] = str(row["strategy_version"])
+
+    if not specs:
+        result.steps.append(
+            StepResult(
+                name="factor_refresh",
+                status="ok",
+                message="no LIVE strategies",
+            )
+        )
+        return True
+
+    svc = ResearchService()
+    failed: list[str] = []
+    ok_n = 0
+    for (fc, uc, ft), sv in specs.items():
+        if fc not in FACTOR_CODES:
+            failed.append(f"{fc}:unsupported")
+            continue
+        try:
+            res = svc.run(
+                ResearchRequest(
+                    factor_code=fc,  # type: ignore[arg-type]
+                    start=day,
+                    end=day,
+                    universe_code=uc,
+                    factor_type=ft,
+                    require_dq=True,
+                    job_id=job_id,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("factor_refresh failed factor=%s", fc)
+            failed.append(f"{fc}/{uc}:{exc}")
+            continue
+        if res.status != "committed":
+            failed.append(f"{fc}/{uc}:{res.message or res.status}")
+        else:
+            ok_n += 1
+            logger.info(
+                "factor_refresh ok factor=%s universe=%s rows=%s strategy=%s",
+                fc,
+                uc,
+                res.row_count,
+                sv,
+            )
+
+    if failed:
+        result.steps.append(
+            StepResult(
+                name="factor_refresh",
+                status="failed",
+                exit_code=2,
+                message="; ".join(failed),
+            )
+        )
+        return False
+
+    result.steps.append(
+        StepResult(
+            name="factor_refresh",
+            status="ok",
+            message=f"refreshed={ok_n}",
+        )
+    )
+    return True
 
 
 def _safe_call(
@@ -375,11 +539,24 @@ def _run_alpha_incremental(
         )
 
 
-def _finalize_alerts(job_id: str, as_of: str, since: str) -> None:
+def _finalize_alerts(
+    job_id: str,
+    as_of: str,
+    since: str,
+    *,
+    schedule_status: str = "committed",
+    message: str = "",
+) -> None:
     try:
         from ops_monitor.notify import notify_round
 
-        notify_round(job_id=job_id, as_of=as_of, since=since)
+        notify_round(
+            job_id=job_id,
+            as_of=as_of,
+            since=since,
+            schedule_status=schedule_status,
+            schedule_message=message,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("notify_round failed: %s", exc)
         print(f"ops_notify failed: {exc}")

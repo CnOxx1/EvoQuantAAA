@@ -111,19 +111,38 @@ class PortfolioConstructService:
                 message=f"as_of={as_of} 无可用 committed signal_prod_weight",
             )
 
+        if request.require_signal_as_of and str(sig_date)[:10] != as_of:
+            return PortfolioBuildResult(
+                status="skipped",
+                portfolio_id=portfolio_id,
+                strategy_version=request.strategy_version,
+                strategy_code=code,
+                as_of=as_of,
+                message=(
+                    f"非调仓日 hold：signal_trade_date={sig_date} != as_of={as_of}"
+                ),
+                meta={
+                    "hold": True,
+                    "signal_trade_date": sig_date,
+                    "signal_batch_id": sig_batch,
+                },
+            )
+
         symbols = [str(w["symbol"]) for w in weights]
         bars = self.repo.load_bars_as_of(
             as_of=as_of, symbols=symbols, factor_type=factor_type
         )
-        prices = {
-            s: float(b["adj_close"])
-            for s, b in bars.items()
-            if b.get("adj_close") is not None
-        }
-        can_buy = {
-            s: int(b["can_buy"]) if b.get("can_buy") is not None else 0
-            for s, b in bars.items()
-        }
+        prices: dict[str, float] = {}
+        can_buy: dict[str, int] = {}
+        can_sell: dict[str, int] = {}
+        for s, b in bars.items():
+            px = b.get("close")
+            if px is None:
+                px = b.get("adj_close")
+            if px is not None:
+                prices[s] = float(px)
+            can_buy[s] = int(b["can_buy"]) if b.get("can_buy") is not None else 0
+            can_sell[s] = int(b["can_sell"]) if b.get("can_sell") is not None else 1
 
         try:
             lot_size = self.repo.load_lot_size(request.cost_version)
@@ -146,6 +165,8 @@ class PortfolioConstructService:
             "job_id": request.job_id,
             "use_ledger_nav": request.use_ledger_nav,
             "nav": nav,
+            "pricing": "unadjusted_close",
+            "capital_weight": request.capital_weight,
         }
         self.repo.create_target(
             {
@@ -171,6 +192,7 @@ class PortfolioConstructService:
                 weight_rows=weights,
                 prices=prices,
                 can_buy=can_buy,
+                can_sell=can_sell,
                 nav=nav,
                 lot_size=lot_size,
             )
@@ -270,18 +292,48 @@ class PortfolioConstructService:
                     status="skipped", message="无 PAPER/LIVE 策略可构建组合"
                 )
             ]
-        return [
-            self.build(
-                PortfolioBuildRequest(
-                    strategy_version=str(v["strategy_version"]),
-                    as_of=as_of,
-                    nav=nav,
-                    account_id=account_id,
-                    cost_version=cost_version,
-                    job_id=job_id,
-                    use_ledger_nav=use_ledger_nav,
-                    force=force,
+        svs = [str(v["strategy_version"]) for v in versions]
+        weights = self.repo.load_capital_weights(
+            account_id=account_id, strategy_versions=svs
+        )
+        # 先估账户总 NAV，再按 capital_weight 切分，避免多策略各吃满仓
+        base_nav = float(nav)
+        if use_ledger_nav:
+            # 取首策略 params 的 factor_type 估权益（缺价回退 adj）
+            sample_params = dict(versions[0].get("params") or {})
+            ft = str(sample_params.get("factor_type") or "qfq")
+            estimated = float(
+                self.repo.estimate_account_nav(
+                    account_id=account_id, as_of=as_of, factor_type=ft
                 )
             )
-            for v in versions
-        ]
+            if estimated > 0:
+                base_nav = estimated
+        if base_nav <= 0:
+            return [
+                PortfolioBuildResult(
+                    status="failed", message="账户 NAV 无效，无法按配额 sizing"
+                )
+            ]
+        out: list[PortfolioBuildResult] = []
+        for v in versions:
+            sv = str(v["strategy_version"])
+            cw = float(weights.get(sv) or 0.0)
+            alloc_nav = base_nav * cw
+            out.append(
+                self.build(
+                    PortfolioBuildRequest(
+                        strategy_version=sv,
+                        as_of=as_of,
+                        nav=alloc_nav,
+                        account_id=account_id,
+                        cost_version=cost_version,
+                        job_id=job_id,
+                        use_ledger_nav=False,
+                        capital_weight=cw,
+                        force=force,
+                        require_signal_as_of=True,
+                    )
+                )
+            )
+        return out

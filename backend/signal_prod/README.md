@@ -26,7 +26,7 @@
 | research_lab | `../research_lab/README.md` | 因子值 | 经库读 `research_factor_value`（非 import） |
 | portfolio_construct | `../portfolio_construct/README.md` | 组合草稿 | 下游（读权重） |
 | backtest | `../backtest/README.md` | 回测 | 可对生产版本做回归 |
-| orchestrator | `../orchestrator/README.md` | 日更 | `schedule` 末尾跑 LIVE |
+| orchestrator | `../orchestrator/README.md` | 日更 | `schedule` 末尾跑 LIVE；其前已 `factor_refresh` |
 
 ## 边界
 - 做：按 `strategy_version` 生成生产权重并落库。

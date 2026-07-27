@@ -34,6 +34,8 @@
 | security_master | `../security_master/README.md` | Universe 快照 | 过滤标的 |
 | alpha_fundamental / alpha_flow | `../data_ingest/...` | 估值/资金 raw | 上游（经库）；schedule 含 valuation+stock_flow |
 | backtest | `../backtest/README.md` | 回测 | `FACTOR_TOP_N` 经库读本表；禁止互相 import |
+| orchestrator | `../orchestrator/README.md` | 日更 | `factor_refresh` 调本模块重算 LIVE 因子 |
+| signal_prod | `../signal_prod/README.md` | 生产信号 | 下游只读本表（经库） |
 
 ## 边界
 - 做：因子纯函数计算、落库、IC/分层评估；写 `research_*`；消费已落库 tech 指标。

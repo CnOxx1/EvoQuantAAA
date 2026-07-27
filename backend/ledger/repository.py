@@ -179,12 +179,34 @@ class LedgerRepository:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def list_lots(self, account_id: str, *, symbol: str | None = None) -> list[dict[str, Any]]:
+    def list_sleeve_positions(
+        self, account_id: str, *, strategy_version: str
+    ) -> dict[str, float]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, qty FROM ledger_sleeve_position
+                WHERE account_id=? AND strategy_version=? AND qty<>0
+                """,
+                (account_id, strategy_version),
+            ).fetchall()
+        return {str(r["symbol"]): float(r["qty"]) for r in rows}
+
+    def list_lots(
+        self,
+        account_id: str,
+        *,
+        symbol: str | None = None,
+        strategy_version: str | None = None,
+    ) -> list[dict[str, Any]]:
         sql = """
             SELECT * FROM ledger_lot
             WHERE account_id=? AND qty_remaining>0
         """
         params: list[Any] = [account_id]
+        if strategy_version is not None:
+            sql += " AND strategy_version=?"
+            params.append(strategy_version)
         if symbol:
             sql += " AND symbol=?"
             params.append(symbol)
@@ -199,8 +221,8 @@ class LedgerRepository:
                 INSERT INTO ledger_posting (
                     posting_id, execution_id, account_id, status, as_of_date,
                     entry_count, cash_after, job_id, meta_json, error_message,
-                    created_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, finished_at, strategy_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["posting_id"],
@@ -215,6 +237,7 @@ class LedgerRepository:
                     row.get("error_message"),
                     row["created_at"],
                     row.get("finished_at"),
+                    row.get("strategy_version"),
                 ),
             )
 
@@ -270,12 +293,14 @@ class LedgerRepository:
         cash_after: float,
         position_deltas: dict[str, float],
         updated_at: str,
+        strategy_version: str = "",
         commit_status: str | None = None,
         entry_count: int | None = None,
         finished_at: str | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
-        """单事务写入分录并更新余额/批次；可选同事务置 posting=committed。"""
+        """单事务写入分录并更新余额/批次/sleeve；可选同事务置 posting=committed。"""
+        sv = strategy_version or ""
         with get_conn() as conn:
             for e in entries:
                 conn.execute(
@@ -311,6 +336,7 @@ class LedgerRepository:
             )
 
             for symbol, delta in position_deltas.items():
+                # 账户合计 POSITION（兼容旧查询 / NAV）
                 row = conn.execute(
                     """
                     SELECT qty FROM ledger_balance
@@ -329,14 +355,34 @@ class LedgerRepository:
                     """,
                     (account_id, symbol, new_qty, updated_at),
                 )
+                # 策略 sleeve
+                srow = conn.execute(
+                    """
+                    SELECT qty FROM ledger_sleeve_position
+                    WHERE account_id=? AND strategy_version=? AND symbol=?
+                    """,
+                    (account_id, sv, symbol),
+                ).fetchone()
+                scur = float(srow["qty"]) if srow else 0.0
+                snew = scur + float(delta)
+                conn.execute(
+                    """
+                    INSERT INTO ledger_sleeve_position (
+                        account_id, strategy_version, symbol, qty, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT (account_id, strategy_version, symbol) DO UPDATE SET
+                        qty=EXCLUDED.qty, updated_at=EXCLUDED.updated_at
+                    """,
+                    (account_id, sv, symbol, snew, updated_at),
+                )
 
             for lot in lot_inserts:
                 conn.execute(
                     """
                     INSERT INTO ledger_lot (
                         lot_id, account_id, symbol, buy_date, qty_remaining,
-                        fill_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        fill_id, created_at, strategy_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lot["lot_id"],
@@ -346,6 +392,7 @@ class LedgerRepository:
                         float(lot["qty_remaining"]),
                         lot.get("fill_id"),
                         updated_at,
+                        str(lot.get("strategy_version") or sv),
                     ),
                 )
             for lot in lot_updates:
@@ -363,7 +410,8 @@ class LedgerRepository:
                     UPDATE ledger_posting
                     SET status=?, entry_count=?, cash_after=?, finished_at=?,
                         error_message=NULL,
-                        meta_json=COALESCE(?, meta_json)
+                        meta_json=COALESCE(?, meta_json),
+                        strategy_version=COALESCE(?, strategy_version)
                     WHERE posting_id=?
                     """,
                     (
@@ -372,6 +420,7 @@ class LedgerRepository:
                         cash_after,
                         finished_at or updated_at,
                         json.dumps(meta, ensure_ascii=False) if meta is not None else None,
+                        sv or None,
                         posting_id,
                     ),
                 )

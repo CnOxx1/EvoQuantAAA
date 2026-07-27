@@ -18,7 +18,12 @@ def _run_mock() -> None:
     assert fail("X", "msg")["error"]["status"] == 400
 
     os.environ.pop("ASHARE_API_TOKEN", None)
+    os.environ.pop("ASHARE_API_REQUIRE_TOKEN", None)
     assert check_bearer(None)[0] is True
+
+    os.environ["ASHARE_API_REQUIRE_TOKEN"] = "1"
+    assert check_bearer(None)[0] is False
+    os.environ.pop("ASHARE_API_REQUIRE_TOKEN", None)
 
     os.environ["ASHARE_API_TOKEN"] = "secret"
     assert check_bearer(None)[0] is False

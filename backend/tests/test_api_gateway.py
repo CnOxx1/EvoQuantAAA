@@ -12,10 +12,19 @@ def test_envelope():
 
 def test_auth_open_when_no_token(monkeypatch):
     monkeypatch.delenv("ASHARE_API_TOKEN", raising=False)
+    monkeypatch.delenv("ASHARE_API_REQUIRE_TOKEN", raising=False)
     assert check_bearer(None) == (True, "anonymous")
 
 
+def test_auth_require_token_when_unset(monkeypatch):
+    monkeypatch.delenv("ASHARE_API_TOKEN", raising=False)
+    monkeypatch.setenv("ASHARE_API_REQUIRE_TOKEN", "1")
+    ok, msg = check_bearer(None)
+    assert ok is False and "ASHARE_API_TOKEN required" in (msg or "")
+
+
 def test_auth_requires_bearer(monkeypatch):
+    monkeypatch.delenv("ASHARE_API_REQUIRE_TOKEN", raising=False)
     monkeypatch.setenv("ASHARE_API_TOKEN", "tok")
     assert check_bearer(None)[0] is False
     assert check_bearer("Bearer tok") == (True, "token")

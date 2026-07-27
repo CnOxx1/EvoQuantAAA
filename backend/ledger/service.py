@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from typing import Any
 from ledger.models import PostRequest, PostResult
 from ledger.posting import apply_fifo_sell, build_fill_entries, sellable_qty
 from ledger.repository import LedgerRepository
+from shared.db import get_conn
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +108,13 @@ class LedgerService:
             )
 
         as_of = str(run.get("as_of_date") or fills[0].get("trade_date") or "")[:10]
+        strategy_version = self._strategy_version_for_execution(run)
         meta: dict[str, Any] = {
             "fill_count": len(fills),
             "job_id": request.job_id,
             "force": request.force,
+            "strategy_version": strategy_version,
+            "sleeve": True,
         }
         self.repo.create_posting(
             {
@@ -121,12 +126,13 @@ class LedgerService:
                 "job_id": request.job_id,
                 "meta": meta,
                 "created_at": created,
+                "strategy_version": strategy_version,
             }
         )
 
         try:
             cash = self.repo.get_cash(account_id)
-            lots = self.repo.list_lots(account_id)
+            lots = self.repo.list_lots(account_id, strategy_version=strategy_version)
             lot_by_id = {str(x["lot_id"]): dict(x) for x in lots}
             position_deltas: dict[str, float] = {}
             lot_inserts: list[dict[str, Any]] = []
@@ -169,6 +175,7 @@ class LedgerService:
                             "buy_date": trade_date,
                             "qty_remaining": qty,
                             "fill_id": fill_id,
+                            "strategy_version": strategy_version,
                         }
                     )
                     lot_by_id[lot_id] = {
@@ -177,6 +184,7 @@ class LedgerService:
                         "buy_date": trade_date,
                         "qty_remaining": qty,
                         "created_at": created,
+                        "strategy_version": strategy_version,
                     }
                 elif side == "SELL":
                     lot_list = list(lot_by_id.values())
@@ -229,15 +237,17 @@ class LedgerService:
                 cash_after=cash,
                 position_deltas=position_deltas,
                 updated_at=created,
+                strategy_version=strategy_version,
                 commit_status="committed",
                 entry_count=len(entry_rows),
                 finished_at=finished,
                 meta=meta,
             )
             logger.info(
-                "ledger posted posting=%s execution=%s entries=%s cash=%.2f",
+                "ledger posted posting=%s execution=%s sleeve=%s entries=%s cash=%.2f",
                 posting_id,
                 request.execution_id,
+                strategy_version,
                 len(entry_rows),
                 cash,
             )
@@ -268,6 +278,28 @@ class LedgerService:
                 account_id=account_id,
                 message=str(exc),
             )
+
+    def _strategy_version_for_execution(self, run: dict[str, Any]) -> str:
+        """优先 execution.meta，其次 portfolio_target.strategy_version。"""
+        raw = run.get("meta") or run.get("meta_json") or {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                raw = {}
+        if isinstance(raw, dict):
+            sv = str(raw.get("strategy_version") or "").strip()
+            if sv:
+                return sv
+        pid = str(run.get("portfolio_id") or "")
+        if not pid:
+            return ""
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT strategy_version FROM portfolio_target WHERE portfolio_id=?",
+                (pid,),
+            ).fetchone()
+        return str(row["strategy_version"]) if row and row["strategy_version"] else ""
 
     def post_unposted(
         self,

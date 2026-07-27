@@ -109,7 +109,37 @@ class ExecutionRepository:
                 (finished_at, reason, portfolio_id),
             )
 
-    def load_ledger_shares(self, account_id: str) -> dict[str, float]:
+    def load_ledger_cash(self, account_id: str) -> float:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT qty FROM ledger_balance
+                WHERE account_id=? AND asset_type='CASH' AND symbol=''
+                """,
+                (account_id,),
+            ).fetchone()
+            if row:
+                return float(row["qty"])
+            acct = conn.execute(
+                "SELECT opening_cash FROM ledger_account WHERE account_id=?",
+                (account_id,),
+            ).fetchone()
+        return float(acct["opening_cash"]) if acct else 0.0
+
+    def load_ledger_shares(
+        self, account_id: str, *, strategy_version: str | None = None
+    ) -> dict[str, float]:
+        """持仓：有 strategy_version 时读 sleeve，否则读账户合计 POSITION。"""
+        if strategy_version is not None:
+            with get_conn() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, qty FROM ledger_sleeve_position
+                    WHERE account_id=? AND strategy_version=? AND qty<>0
+                    """,
+                    (account_id, strategy_version),
+                ).fetchall()
+            return {str(r["symbol"]): float(r["qty"]) for r in rows}
         with get_conn() as conn:
             rows = conn.execute(
                 """
@@ -120,19 +150,42 @@ class ExecutionRepository:
             ).fetchall()
         return {str(r["symbol"]): float(r["qty"]) for r in rows}
 
-    def load_sellable_shares(self, account_id: str, as_of: str) -> dict[str, float]:
-        """T+1：buy_date < as_of 的 lot 可卖数量合计。"""
+    def load_sellable_shares(
+        self,
+        account_id: str,
+        as_of: str,
+        *,
+        strategy_version: str | None = None,
+    ) -> dict[str, float]:
+        """T+1：buy_date < as_of 的 lot 可卖数量合计（可按 sleeve 过滤）。"""
+        sql = """
+            SELECT symbol, SUM(qty_remaining) AS qty
+            FROM ledger_lot
+            WHERE account_id=? AND qty_remaining>0 AND buy_date<?
+        """
+        params: list[Any] = [account_id, as_of[:10]]
+        if strategy_version is not None:
+            sql += " AND strategy_version=?"
+            params.append(strategy_version)
+        sql += " GROUP BY symbol"
         with get_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT symbol, SUM(qty_remaining) AS qty
-                FROM ledger_lot
-                WHERE account_id=? AND qty_remaining>0 AND buy_date<?
-                GROUP BY symbol
-                """,
-                (account_id, as_of[:10]),
-            ).fetchall()
+            rows = conn.execute(sql, tuple(params)).fetchall()
         return {str(r["symbol"]): float(r["qty"] or 0) for r in rows}
+
+    def has_committed_posting_for_portfolio(self, portfolio_id: str) -> bool:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM execution_run e
+                JOIN ledger_posting p ON p.execution_id=e.execution_id
+                WHERE e.portfolio_id=? AND e.status='committed'
+                  AND p.status='committed'
+                LIMIT 1
+                """,
+                (portfolio_id,),
+            ).fetchone()
+        return bool(row)
 
     def load_bars_as_of(
         self,
@@ -149,7 +202,7 @@ class ExecutionRepository:
         start = (date.fromisoformat(as_of[:10]) - timedelta(days=lookback_days)).isoformat()
         ph = ",".join("?" * len(symbols))
         sql = f"""
-            SELECT symbol, trade_date, adj_close, can_buy, can_sell
+            SELECT symbol, trade_date, close, adj_close, can_buy, can_sell
             FROM processed_equity_bar_1d
             WHERE factor_type=? AND trade_date>=? AND trade_date<=?
               AND symbol IN ({ph})
@@ -304,6 +357,126 @@ class ExecutionRepository:
         ]
         with get_conn() as conn:
             conn.executemany(sql, params)
+
+    def commit_execution_atomic(
+        self,
+        *,
+        run_row: dict[str, Any],
+        order_events: list[dict[str, Any]],
+        fill_events: list[dict[str, Any]],
+        order_count: int,
+        fill_count: int,
+        finished_at: str,
+        meta: dict[str, Any],
+        mark_portfolio_executed: bool = True,
+    ) -> None:
+        """单事务：INSERT run(running) → orders/fills → run=committed → portfolio=executed。"""
+        order_sql = """
+            INSERT INTO order_event (
+                event_id, order_id, execution_id, portfolio_id, account_id,
+                symbol, side, qty, limit_price, status, event_type, reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        fill_sql = """
+            INSERT INTO fill_event (
+                fill_id, order_id, execution_id, portfolio_id, account_id,
+                symbol, side, qty, price, amount, commission, stamp_tax,
+                slippage_cost, trade_date, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO execution_run (
+                    execution_id, portfolio_id, account_id, adapter, status,
+                    as_of_date, decision_id, cost_version, order_count, fill_count,
+                    job_id, meta_json, error_message, created_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_row["execution_id"],
+                    run_row["portfolio_id"],
+                    run_row["account_id"],
+                    run_row["adapter"],
+                    "running",
+                    run_row.get("as_of_date"),
+                    run_row.get("decision_id"),
+                    run_row["cost_version"],
+                    0,
+                    0,
+                    run_row.get("job_id"),
+                    json.dumps(run_row.get("meta") or {}, ensure_ascii=False),
+                    None,
+                    run_row["created_at"],
+                    None,
+                ),
+            )
+            if order_events:
+                conn.executemany(
+                    order_sql,
+                    [
+                        (
+                            r["event_id"],
+                            r["order_id"],
+                            r["execution_id"],
+                            r["portfolio_id"],
+                            r["account_id"],
+                            r["symbol"],
+                            r["side"],
+                            float(r["qty"]),
+                            r.get("limit_price"),
+                            r["status"],
+                            r["event_type"],
+                            r.get("reason"),
+                            r["created_at"],
+                        )
+                        for r in order_events
+                    ],
+                )
+            if fill_events:
+                conn.executemany(
+                    fill_sql,
+                    [
+                        (
+                            r["fill_id"],
+                            r["order_id"],
+                            r["execution_id"],
+                            r["portfolio_id"],
+                            r["account_id"],
+                            r["symbol"],
+                            r["side"],
+                            float(r["qty"]),
+                            float(r["price"]),
+                            float(r["amount"]),
+                            float(r["commission"]),
+                            float(r.get("stamp_tax") or 0),
+                            float(r.get("slippage_cost") or 0),
+                            r["trade_date"],
+                            r["created_at"],
+                        )
+                        for r in fill_events
+                    ],
+                )
+            conn.execute(
+                """
+                UPDATE execution_run
+                SET status='committed', order_count=?, fill_count=?, finished_at=?,
+                    error_message=NULL, meta_json=?
+                WHERE execution_id=?
+                """,
+                (
+                    order_count,
+                    fill_count,
+                    finished_at,
+                    json.dumps(meta, ensure_ascii=False),
+                    run_row["execution_id"],
+                ),
+            )
+            if mark_portfolio_executed:
+                conn.execute(
+                    "UPDATE portfolio_target SET status='executed' WHERE portfolio_id=?",
+                    (run_row["portfolio_id"],),
+                )
 
     def supersede_committed(self, portfolio_id: str, *, finished_at: str) -> None:
         with get_conn() as conn:

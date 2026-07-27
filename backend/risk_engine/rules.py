@@ -118,3 +118,65 @@ def evaluate_portfolio(
         )
 
     return breaches
+
+
+def evaluate_account_book(
+    *,
+    position_books: list[list[dict[str, Any]]],
+    account_nav: float,
+    limits: RiskLimits,
+) -> list[dict[str, Any]]:
+    """
+    同账户多策略合并敞口：按 symbol 汇总 target_value，相对账户 NAV 校验。
+    """
+    breaches: list[dict[str, Any]] = []
+    if account_nav is None or account_nav <= 0:
+        breaches.append(
+            {
+                "code": "INVALID_ACCOUNT_NAV",
+                "severity": "error",
+                "message": "账户 nav 无效",
+            }
+        )
+        return breaches
+
+    by_sym: dict[str, float] = {}
+    for book in position_books:
+        for p in book:
+            val = float(p.get("target_value") or 0.0)
+            if val <= 0:
+                continue
+            sym = str(p.get("symbol") or "")
+            if not sym:
+                continue
+            by_sym[sym] = by_sym.get(sym, 0.0) + val
+
+    invested = sum(by_sym.values())
+    gross = invested / account_nav
+    if gross > float(limits.max_gross_exposure) + 1e-9:
+        breaches.append(
+            {
+                "code": "ACCOUNT_MAX_GROSS_EXPOSURE",
+                "severity": "error",
+                "message": (
+                    f"账户合并敞口 {gross:.4f} > max={limits.max_gross_exposure}"
+                ),
+                "value": gross,
+            }
+        )
+
+    for sym, val in by_sym.items():
+        w = val / account_nav
+        if w > float(limits.max_single_weight) + 1e-9:
+            breaches.append(
+                {
+                    "code": "ACCOUNT_MAX_SINGLE_WEIGHT",
+                    "severity": "error",
+                    "symbol": sym,
+                    "message": (
+                        f"账户合并单票权重 {w:.4f} > max={limits.max_single_weight}"
+                    ),
+                    "value": w,
+                }
+            )
+    return breaches

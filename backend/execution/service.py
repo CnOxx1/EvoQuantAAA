@@ -56,6 +56,16 @@ class ExecutionService:
                 account_id=account_id,
                 message="portfolio 已 executed（加 --force 可重跑，需先无 committed 唯一约束冲突）",
             )
+        if request.force and self.repo.has_committed_posting_for_portfolio(
+            request.portfolio_id
+        ):
+            return ExecutionResult(
+                status="blocked",
+                execution_id=execution_id,
+                portfolio_id=request.portfolio_id,
+                account_id=account_id,
+                message="已有 committed ledger_posting，禁止 --force 重跑（需冲正后再处理）",
+            )
         if st != "approved" and not (request.force and st == "executed"):
             return ExecutionResult(
                 status="blocked",
@@ -137,11 +147,17 @@ class ExecutionService:
             )
 
         positions = self.repo.list_positions(request.portfolio_id)
-        current_shares = self.repo.load_ledger_shares(account_id)
+        strategy_version = str(pf.get("strategy_version") or "")
+        current_shares = self.repo.load_ledger_shares(
+            account_id, strategy_version=strategy_version
+        )
         trade_date = as_of or created[:10]
-        sellable = self.repo.load_sellable_shares(account_id, trade_date)
+        sellable = self.repo.load_sellable_shares(
+            account_id, trade_date, strategy_version=strategy_version
+        )
+        cash = self.repo.load_ledger_cash(account_id)
 
-        # 持仓中但不在目标表的标的：补价/掩码，便于卖出差额
+        # 持仓中但不在目标表的标的：补价/掩码，便于卖出差额（仅本 sleeve）
         pmeta = _portfolio_meta(pf)
         factor_type = str(pmeta.get("factor_type") or "qfq")
         pos_syms = {str(p["symbol"]) for p in positions}
@@ -152,11 +168,13 @@ class ExecutionService:
             )
             for sym in need_syms:
                 b = bars.get(sym) or {}
+                # 成交用未复权 close；缺 close 再退 adj_close
+                px = b.get("close") if b.get("close") is not None else b.get("adj_close")
                 positions.append(
                     {
                         "symbol": sym,
                         "target_shares": 0.0,
-                        "price": b.get("adj_close"),
+                        "price": px,
                         "can_buy": b.get("can_buy"),
                         "can_sell": b.get("can_sell"),
                     }
@@ -168,7 +186,11 @@ class ExecutionService:
             sellable_shares=sellable,
         )
         orders_raw, fills_raw = simulate_paper_fills(
-            intents=intents, cost=cost, trade_date=trade_date
+            intents=intents,
+            cost=cost,
+            trade_date=trade_date,
+            cash=cash,
+            lot_size=cost.lot_size,
         )
 
         meta: dict[str, Any] = {
@@ -177,35 +199,37 @@ class ExecutionService:
             "kill_scopes": kill_scopes,
             "intent_count": len(intents),
             "job_id": request.job_id,
-            "assumption": "ledger_delta_to_target",
+            "assumption": "ledger_delta_to_target_sleeve",
+            "strategy_version": strategy_version,
             "ledger_position_count": len(current_shares),
             "factor_type": factor_type,
+            "pricing": "unadjusted_close",
+            "cash_before": cash,
         }
-        self.repo.create_run(
-            {
-                "execution_id": execution_id,
-                "portfolio_id": request.portfolio_id,
-                "account_id": account_id,
-                "adapter": request.adapter,
-                "status": "running",
-                "as_of_date": as_of or None,
-                "decision_id": decision.get("decision_id"),
-                "cost_version": request.cost_version,
-                "order_count": 0,
-                "fill_count": 0,
-                "job_id": request.job_id,
-                "meta": meta,
-                "created_at": created,
-            }
-        )
 
-        try:
-            order_events: list[dict[str, Any]] = []
-            fill_events: list[dict[str, Any]] = []
-            # 对齐 order 与 fill：按 symbol+side 顺序
-            fill_i = 0
-            for o in orders_raw:
-                order_id = f"ord_{uuid.uuid4().hex}"
+        order_events: list[dict[str, Any]] = []
+        fill_events: list[dict[str, Any]] = []
+        fill_i = 0
+        for o in orders_raw:
+            order_id = f"ord_{uuid.uuid4().hex}"
+            order_events.append(
+                {
+                    "event_id": f"oe_{uuid.uuid4().hex}",
+                    "order_id": order_id,
+                    "execution_id": execution_id,
+                    "portfolio_id": request.portfolio_id,
+                    "account_id": account_id,
+                    "symbol": o["symbol"],
+                    "side": o["side"],
+                    "qty": o["qty"],
+                    "limit_price": o.get("limit_price"),
+                    "status": o["status"],
+                    "event_type": "NEW",
+                    "reason": o.get("reason"),
+                    "created_at": created,
+                }
+            )
+            if o["status"] == "FILLED":
                 order_events.append(
                     {
                         "event_id": f"oe_{uuid.uuid4().hex}",
@@ -217,64 +241,55 @@ class ExecutionService:
                         "side": o["side"],
                         "qty": o["qty"],
                         "limit_price": o.get("limit_price"),
-                        "status": o["status"],
-                        "event_type": "NEW",
-                        "reason": o.get("reason"),
+                        "status": "FILLED",
+                        "event_type": "STATUS",
+                        "reason": None,
                         "created_at": created,
                     }
                 )
-                if o["status"] == "FILLED":
-                    # 状态更新事件
-                    order_events.append(
-                        {
-                            "event_id": f"oe_{uuid.uuid4().hex}",
-                            "order_id": order_id,
-                            "execution_id": execution_id,
-                            "portfolio_id": request.portfolio_id,
-                            "account_id": account_id,
-                            "symbol": o["symbol"],
-                            "side": o["side"],
-                            "qty": o["qty"],
-                            "limit_price": o.get("limit_price"),
-                            "status": "FILLED",
-                            "event_type": "STATUS",
-                            "reason": None,
-                            "created_at": created,
-                        }
-                    )
-                    f = fills_raw[fill_i]
-                    fill_i += 1
-                    fill_events.append(
-                        {
-                            "fill_id": f"fl_{uuid.uuid4().hex}",
-                            "order_id": order_id,
-                            "execution_id": execution_id,
-                            "portfolio_id": request.portfolio_id,
-                            "account_id": account_id,
-                            "symbol": f["symbol"],
-                            "side": f["side"],
-                            "qty": f["qty"],
-                            "price": f["price"],
-                            "amount": f["amount"],
-                            "commission": f["commission"],
-                            "stamp_tax": f["stamp_tax"],
-                            "slippage_cost": f["slippage_cost"],
-                            "trade_date": f["trade_date"],
-                            "created_at": created,
-                        }
-                    )
+                f = fills_raw[fill_i]
+                fill_i += 1
+                fill_events.append(
+                    {
+                        "fill_id": f"fl_{uuid.uuid4().hex}",
+                        "order_id": order_id,
+                        "execution_id": execution_id,
+                        "portfolio_id": request.portfolio_id,
+                        "account_id": account_id,
+                        "symbol": f["symbol"],
+                        "side": f["side"],
+                        "qty": f["qty"],
+                        "price": f["price"],
+                        "amount": f["amount"],
+                        "commission": f["commission"],
+                        "stamp_tax": f["stamp_tax"],
+                        "slippage_cost": f["slippage_cost"],
+                        "trade_date": f["trade_date"],
+                        "created_at": created,
+                    }
+                )
 
-            self.repo.insert_order_events(order_events)
-            self.repo.insert_fills(fill_events)
-            self.repo.finish_run(
-                execution_id=execution_id,
-                status="committed",
+        try:
+            self.repo.commit_execution_atomic(
+                run_row={
+                    "execution_id": execution_id,
+                    "portfolio_id": request.portfolio_id,
+                    "account_id": account_id,
+                    "adapter": request.adapter,
+                    "as_of_date": as_of or None,
+                    "decision_id": decision.get("decision_id"),
+                    "cost_version": request.cost_version,
+                    "job_id": request.job_id,
+                    "meta": meta,
+                    "created_at": created,
+                },
+                order_events=order_events,
+                fill_events=fill_events,
                 order_count=len(orders_raw),
                 fill_count=len(fill_events),
                 finished_at=_utcnow(),
                 meta=meta,
             )
-            self.repo.mark_portfolio_executed(request.portfolio_id)
             logger.info(
                 "execution committed id=%s portfolio=%s orders=%s fills=%s",
                 execution_id,
@@ -293,15 +308,18 @@ class ExecutionService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("execution failed")
-            self.repo.finish_run(
-                execution_id=execution_id,
-                status="failed",
-                order_count=0,
-                fill_count=0,
-                finished_at=_utcnow(),
-                error_message=str(exc),
-                meta=meta,
-            )
+            # 原子提交失败时不应留下 running；若有残留则标记 failed
+            stuck = self.repo.find_running_execution(request.portfolio_id)
+            if stuck and str(stuck.get("execution_id")) == execution_id:
+                self.repo.finish_run(
+                    execution_id=execution_id,
+                    status="failed",
+                    order_count=0,
+                    fill_count=0,
+                    finished_at=_utcnow(),
+                    error_message=str(exc),
+                    meta=meta,
+                )
             return ExecutionResult(
                 status="failed",
                 execution_id=execution_id,

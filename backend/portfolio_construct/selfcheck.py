@@ -40,6 +40,8 @@ def _run_mock() -> None:
     by = {p["symbol"]: p for p in positions}
     assert by["A"]["target_shares"] == 5000
     assert by["B"]["target_shares"] == 2500
+    assert by["A"]["can_sell"] == 1
+    assert meta.get("pricing") == "unadjusted_close"
     print("mock_cases=ok")
 
 

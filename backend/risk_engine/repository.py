@@ -130,6 +130,29 @@ class RiskRepository:
         with get_conn() as conn:
             return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
 
+    def list_account_active_portfolios(
+        self,
+        *,
+        account_id: str,
+        as_of: str,
+        exclude_portfolio_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """同账户同日 draft/approved/executed，用于合并敞口。"""
+        if not as_of:
+            return []
+        sql = """
+            SELECT * FROM portfolio_target
+            WHERE account_id=? AND as_of_date=?
+              AND status IN ('draft', 'approved', 'executed')
+        """
+        params: list[Any] = [account_id, as_of[:10]]
+        if exclude_portfolio_id:
+            sql += " AND portfolio_id<>?"
+            params.append(exclude_portfolio_id)
+        sql += " ORDER BY created_at"
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
     def latest_decision(self, portfolio_id: str) -> dict[str, Any] | None:
         with get_conn() as conn:
             row = conn.execute(

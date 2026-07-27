@@ -7,7 +7,7 @@ from typing import Any
 
 from risk_engine.models import RiskReviewRequest, RiskReviewResult
 from risk_engine.repository import RiskRepository
-from risk_engine.rules import evaluate_portfolio
+from risk_engine.rules import evaluate_account_book, evaluate_portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,24 @@ class RiskEngineService:
                 portfolio_id=request.portfolio_id,
                 message=f"不可审核状态: {st}",
             )
-        if st != "draft" and not request.force:
-            return RiskReviewResult(
-                status="skipped",
-                portfolio_id=request.portfolio_id,
-                account_id=str(pf.get("account_id") or ""),
-                message=f"已是 {st}（加 --force 可重审）",
-            )
 
         account_id = str(pf.get("account_id") or "paper_default")
         kill_on, kill_scopes = self.repo.is_kill_on(account_id=account_id)
+
+        if st != "draft" and not request.force:
+            # Kill 解除后：曾因 Kill 否决的组合可自动重审（无需 --force）
+            allow_kill_retry = False
+            if st == "rejected" and not kill_on:
+                prev = self.repo.latest_decision(request.portfolio_id)
+                if prev and int(prev.get("kill_switch_on") or 0) == 1:
+                    allow_kill_retry = True
+            if not allow_kill_retry:
+                return RiskReviewResult(
+                    status="skipped",
+                    portfolio_id=request.portfolio_id,
+                    account_id=account_id,
+                    message=f"已是 {st}（加 --force 可重审）",
+                )
         try:
             limits = self.repo.load_limits(request.limits_version)
         except RuntimeError as exc:
@@ -70,6 +78,44 @@ class RiskEngineService:
             kill_switch_on=kill_on,
             limits=limits,
         )
+        # 同账户同日其他活跃组合：合并敞口，防止多策略同票叠加超限
+        as_of = str(pf.get("as_of_date") or "")[:10]
+        siblings = self.repo.list_account_active_portfolios(
+            account_id=account_id,
+            as_of=as_of,
+            exclude_portfolio_id=request.portfolio_id,
+        )
+        if siblings:
+            books = [positions]
+            for sib in siblings:
+                books.append(self.repo.list_positions(str(sib["portfolio_id"])))
+            # 账户分母用本组合 nav 所在账户口径：优先用各 slice nav 之和仅当均来自配额；
+            # 更稳：用本 pf.nav / capital_weight 反推，缺则 sum(nav)
+            cw = None
+            raw_meta = pf.get("meta") or pf.get("meta_json") or {}
+            if isinstance(raw_meta, str):
+                try:
+                    import json
+
+                    raw_meta = json.loads(raw_meta or "{}")
+                except json.JSONDecodeError:
+                    raw_meta = {}
+            if isinstance(raw_meta, dict) and raw_meta.get("capital_weight"):
+                try:
+                    cw = float(raw_meta["capital_weight"])
+                except (TypeError, ValueError):
+                    cw = None
+            slice_nav = float(pf.get("nav") or 0)
+            if cw and cw > 0 and slice_nav > 0:
+                account_nav = slice_nav / cw
+            else:
+                account_nav = slice_nav + sum(float(s.get("nav") or 0) for s in siblings)
+            acct_breaches = evaluate_account_book(
+                position_books=books,
+                account_nav=account_nav if account_nav > 0 else slice_nav,
+                limits=limits,
+            )
+            breaches.extend(acct_breaches)
         decision_status = "approved" if not breaches else "rejected"
         decision_id = f"rd_{uuid.uuid4().hex}"
         created = _utcnow()
@@ -78,6 +124,7 @@ class RiskEngineService:
             "kill_scopes": kill_scopes,
             "strategy_version": pf.get("strategy_version"),
             "position_count": len(positions),
+            "sibling_portfolio_count": len(siblings) if siblings else 0,
             "force": request.force,
         }
         self.repo.insert_decision(

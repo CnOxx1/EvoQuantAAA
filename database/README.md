@@ -17,7 +17,12 @@
 cd backend
 python main.py migrate
 ```
-迁移脚本为 PostgreSQL 方言（`BIGSERIAL` 等），版本记录在 `schema_migrations`。
+迁移脚本为 PostgreSQL 方言（`BIGSERIAL` 等），版本记录在 `schema_migrations`。当前迁移至 **`031_strategy_sleeve.sql`**（新文件从 `032` 起）。
+
+数据一致性速查（过账后）：
+- `sum(sleeve)`（account+symbol）应对齐 `ledger_balance` POSITION
+- `sum(lot)`（account+strategy_version+symbol）应对齐对应 sleeve
+- 开发冒烟若见 `strategy_version=''` 与命名 sleeve 并存，属 031 回填+新仓叠加，见 `backend/ledger/README.md`
 
 ## 生产数据与落库表
 

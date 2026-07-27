@@ -80,3 +80,87 @@ def test_stamp_tax_sell_only():
     )
     assert buys[0]["stamp_tax"] == 0.0
     assert abs(sells[0]["stamp_tax"] - 1.0) < 1e-9
+
+
+def test_cash_guard_rejects_and_clamps():
+    cost = CostSnapshot(
+        version="t",
+        commission_rate=0.0,
+        min_commission=0.0,
+        stamp_tax_rate=0.0,
+        slippage_rate=0.0,
+    )
+    orders, fills = simulate_paper_fills(
+        intents=[
+            {
+                "symbol": "A",
+                "side": "BUY",
+                "qty": 1000,
+                "reject": False,
+                "mid_price": 10.0,
+            }
+        ],
+        cost=cost,
+        trade_date="2026-07-23",
+        cash=500.0,
+        lot_size=100,
+    )
+    assert orders[0]["status"] == "REJECTED"
+    assert orders[0]["reason"] == "insufficient_cash"
+    assert fills == []
+
+    orders2, fills2 = simulate_paper_fills(
+        intents=[
+            {
+                "symbol": "B",
+                "side": "BUY",
+                "qty": 500,
+                "reject": False,
+                "mid_price": 10.0,
+            }
+        ],
+        cost=cost,
+        trade_date="2026-07-23",
+        cash=2500.0,
+        lot_size=100,
+    )
+    assert orders2[0]["status"] == "FILLED"
+    assert orders2[0]["qty"] == 200
+    assert orders2[0]["reason"] == "clamped_cash"
+    assert fills2[0]["qty"] == 200
+
+
+def test_sell_before_buy_frees_cash():
+    cost = CostSnapshot(
+        version="t",
+        commission_rate=0.0,
+        min_commission=0.0,
+        stamp_tax_rate=0.0,
+        slippage_rate=0.0,
+    )
+    orders, fills = simulate_paper_fills(
+        intents=[
+            {
+                "symbol": "BUY1",
+                "side": "BUY",
+                "qty": 100,
+                "reject": False,
+                "mid_price": 10.0,
+            },
+            {
+                "symbol": "SELL1",
+                "side": "SELL",
+                "qty": 100,
+                "reject": False,
+                "mid_price": 10.0,
+            },
+        ],
+        cost=cost,
+        trade_date="2026-07-23",
+        cash=0.0,
+        lot_size=100,
+    )
+    by = {o["symbol"]: o for o in orders}
+    assert by["SELL1"]["status"] == "FILLED"
+    assert by["BUY1"]["status"] == "FILLED"
+    assert len(fills) == 2

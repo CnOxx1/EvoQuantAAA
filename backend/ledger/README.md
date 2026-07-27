@@ -1,65 +1,44 @@
 # ledger
 
 ## 名称
-资金持仓账本：消费成交事件过账；维护现金、持仓、T+1 可卖批次。
+账本：成交事件过账；维护现金/持仓余额与 T+1 可卖批次。
 
 ## 生产数据与落库表
 
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
-| 账户 | `ledger_account` | `ledger ensure` / 迁移种子 `paper_default` |
-| 过账批次 | `ledger_posting` | `ledger post`；同 execution 至多一 committed |
-| 分录 | `ledger_entry` | 过账时追加（CASH_IN/OUT、POSITION_IN/OUT） |
-| 余额 | `ledger_balance` | 现金与持仓数量 |
-| 买入批次 | `ledger_lot` | T+1 可卖；FIFO 扣减 |
+| 账户 | `ledger_account` | `ledger ensure` / 首次 post 自动 |
+| 过账批次 | `ledger_posting` | `ledger post`；按 execution 幂等 |
+| 分录 | `ledger_entry` | 与 posting committed 同事务 |
+| 余额 | `ledger_balance` | 现金（账户级）+ 合计持仓 |
+| 策略持仓 | `ledger_sleeve_position` | 按 `(account, strategy_version, symbol)` |
+| 买入批次 | `ledger_lot` | T+1 可卖；FIFO；含 `strategy_version` |
 
-
-## 本目录模块一览
-无子模块；本目录即单一业务模块实现。
+迁移：`027_ledger.sql` + `031_strategy_sleeve.sql`。
 
 ## 协作模块索引（供 AI Agent）
 
 | 模块 | README | 主要作用 | 与本模块关系 |
 | --- | --- | --- | --- |
-| backend（父） | `../README.md` | 总览 | 父目录 |
-| database | `../../database/README.md` | 账本契约 | 上游契约 |
-| execution | `../execution/README.md` | 订单成交事件 | 上游（只读 `fill_event`） |
-| portfolio_construct | `../portfolio_construct/README.md` | 组合 | 可经库读权益（后续） |
-| risk_engine | `../risk_engine/README.md` | 风控 | 可经库读暴露（后续） |
-| ops_monitor | `../ops_monitor/README.md` | 对账 | 同级 |
-| orchestrator | `../orchestrator/README.md` | 日更 | `schedule` 过账 unposted |
-| frontend/trade | `../../frontend/trade/README.md` | UI | 经 gateway 展示 |
+| execution | `../execution/README.md` | OMS 成交事件 | 上游；CLI 每个 committed 后立即 post |
+| portfolio_construct | `../portfolio_construct/README.md` | 目标持仓 | 读账户 NAV |
+| risk_engine | `../risk_engine/README.md` | 风控 | 间接 |
+| orchestrator | `../orchestrator/README.md` | 日更 | `ledger_post` 兜底未过账 |
 
 ## 边界
-- 做：`fill_event` → 分录 → 余额/批次；T+1 可卖查询；先卖后买排序过账。
-- 不做：向柜台发单；无冲正情况下强制重过账；import execution 内部实现。
-
-## 输入
-- `execution_run.status=committed` + `fill_event`
-- `ledger_account`（期初现金）
-
-## 输出
-- `ledger_posting` / `ledger_entry` / `ledger_balance` / `ledger_lot`
-
-## T+1 口径
-- 买入当日：`buy_date = trade_date`，当日不可卖（`sellable` 仅计 `buy_date < as_of`）
-- 卖出：FIFO 扣减可卖批次；不足则过账失败
-
-## 运行
-
-```bash
-cd backend
-python main.py ledger ensure --account paper_default --opening-cash 1000000
-python main.py ledger post --execution ex_xxx
-python main.py ledger post --unposted --account paper_default
-python main.py ledger show --account paper_default --as-of 2026-07-24
-python main.py ledger sellable --account paper_default --as-of 2026-07-24
-python -m ledger.selfcheck
-```
+- 做：fill → 分录；更新现金/合计持仓/sleeve/lot；T+1 可卖校验。
+- 不做：下单；改目标持仓；绕过 execution 直接改仓。
 
 ## 不变量
-- 余额仅由分录/过账更新
-- T+1：当日买入不可卖
-- 同一 `execution_id` 幂等（已 committed 则 skipped）
-- 分录写入与 `posting.status=committed` **同事务**；空 `running` 可清后重试，已有分录的半完成需人工处理
-- 模块间经库交接
+- 现金账户共享；**持仓按 strategy_version sleeve 隔离**（防多策略串仓）
+- 同 execution 至多一 committed posting；不支持 `--force` 重过账（需冲正）
+- SELL 仅扣本策略可卖 lot（`buy_date < as_of`）
+- 恒等式（过账后应满足）：
+  - `sum(ledger_sleeve_position.qty)`（同 account+symbol）= `ledger_balance` POSITION
+  - `sum(ledger_lot.qty_remaining)`（同 account+strategy_version+symbol）= 对应 sleeve qty
+
+## 历史数据（迁移 `031`）
+- 存量账户级 POSITION 会回填到 `strategy_version=''` 的 sleeve/lot
+- **新过账**写入真实 `strategy_version`；execution 只读命名 sleeve，不会误卖 `''` 旧仓
+- 开发/冒烟账户若同时存在 `''` 与命名 sleeve，账户合计 NAV 会偏高；可清空该账户 sleeve+lot+POSITION 后重跑 e2e，或归档 `strategy_version=''` 行
+- 旧 `portfolio_target_position.can_sell` 可能为 NULL；阶段 14 之后新建草稿必填 0/1

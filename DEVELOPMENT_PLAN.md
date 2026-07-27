@@ -20,7 +20,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `029`（prod_hardening），**新迁移从 `030` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `031`（strategy_sleeve），**新迁移从 `032` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -59,9 +59,15 @@
 | 账本过账 + T+1 | `ledger`（迁移 `027`） |
 | 对外 API 网关 | `api_gateway`（迁移 `028`） |
 | 生产硬化 | 差额成交 / 按日幂等 / 账本原子过账（迁移 `029`） |
+| 量化正确性 | LIVE 因子日刷 / 现金约束 / 资本配额 / 未复权成交价（迁移 `030`） |
+| 策略 sleeve | 同账户持仓按 strategy_version 隔离；执行后即过账；非调仓 hold；回测 lot T+1（迁移 `031`） |
 | E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
 
-> **阶段 12（2026-07-27）**：E2E 短窗回归 + console 只读页。主线下一优先：写操作 UI / 告警分级 / execution 事件原子化。
+> **阶段 15（2026-07-27）**：策略 sleeve 持仓；execution 后立即 ledger post；非调仓日 portfolio hold；signal 失败短路；回测 FIFO lot + close 成交；force 有 posting 则禁止。下一优先：晋升质量门 / 残差 pending / 冲击成本。
+>
+> **阶段 14（2026-07-27）**：量化正确性 Critical：schedule 前刷 LIVE 因子；纸面成交现金约束；同账户资本配额；sizing/成交用未复权 `close`；目标腿 `can_sell`；风控账户合并敞口（迁移 `030`）。
+>
+> **阶段 13（2026-07-27）**：execution 事件原子提交；security_master 失败跳过交易链；degraded 告警分级；API REQUIRE_TOKEN；Kill 解除可重审。
 
 ---
 
@@ -337,6 +343,47 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：`e2e` exit 0；console 可拉 `/v1/strategies` 与 kill/ledger。
 
+---
+
+## 阶段 13 · 编排与执行硬化补丁
+
+### 任务 13.1 atomic exec + sm gate + alerts
+
+**要求**：execution `commit_execution_atomic`；`security_master` 失败跳过 signal→ledger 并 `degraded`；`notify_round` 对 failed/degraded 分 severity；`ASHARE_API_REQUIRE_TOKEN`；Kill 解除后可重审曾被 Kill 否决的组合；文档同步。
+
+**验收**：pytest 全绿；README 说明与行为一致。
+
+---
+
+## 阶段 14 · 量化正确性 Critical
+
+### 任务 14.1 factor refresh / cash / capital / close / can_sell
+
+**要求**：
+1. `schedule` 在 `signal_live` 前按 LIVE 策略刷新 `research_factor_value`；失败则跳过交易链并 `degraded`
+2. 纸面成交投影现金：先卖后买，不足则 `insufficient_cash` / `clamped_cash`
+3. 同账户多策略经 `strategy_capital_alloc` 切分 NAV（缺省等权）
+4. sizing / 成交价优先未复权 `close`（缺再退 `adj_close`）
+5. `portfolio_target_position.can_sell` 落库；风控合并同账户同日敞口
+
+**验收**：迁移 `030` 已应用；pytest 含现金约束与账户合并敞口；相关 README / 任务书同步。
+
+---
+
+## 阶段 15 · 策略 sleeve 与回测对齐
+
+### 任务 15.1 sleeve / post-after-exec / hold / lot T+1
+
+**要求**：
+1. `ledger_sleeve_position` + `ledger_lot.strategy_version`；execution 差额仅对本策略 sleeve
+2. `execution run` 每个 committed 后立即 `ledger post`（同日多组合不再共享未过账快照）
+3. live `portfolio build`：`require_signal_as_of` — 非调仓日 hold skipped
+4. schedule：`signal_live` failed 短路后续交易步
+5. 回测：FIFO lot T+1（加仓不合并 buy_date）；成交价优先 `close`
+6. 已有 posting 的 portfolio 禁止 `--force` 重跑
+
+**验收**：迁移 `031`；pytest 全绿；README 同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -365,3 +412,6 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 10 | 10.1 api_gateway | FastAPI 查询/Kill/晋升 |
 | 11 | 11.1 prod hardening | 差额成交 / 幂等 / 原子过账 / degraded |
 | 12 | 12.1 e2e + console | 短窗 E2E + 只读台 |
+| 13 | 13.1 exec/sm/alerts patch | 原子执行 / SM 门禁 / 告警分级 |
+| 14 | 14.1 quant correctness | 因子日刷 / 现金 / 配额 / close / 账户敞口 |
+| 15 | 15.1 sleeve + hold + lot T+1 | 策略持仓隔离 / 即过账 / 非调仓 hold / 回测对齐 |

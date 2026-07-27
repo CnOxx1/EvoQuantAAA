@@ -30,11 +30,12 @@
 | api_gateway | `../api_gateway/README.md` | 人工 Kill Switch | 入口（HTTP `/v1/risk/kill`） |
 
 ## 边界
-- 做：校验 draft、写 `risk_decision`、标记 portfolio `approved`/`rejected`、维护 kill switch。
+- 做：校验 draft、写 `risk_decision`、标记 portfolio `approved`/`rejected`、维护 kill switch；同账户同日合并敞口。
 - 不做：组合优化；柜台下单；在无审计情况下改限额（改 `risk_limits` 需新迁移/种子）。
 
 ## 输入
 - `portfolio_id`（status=draft）、`risk_limits`、`kill_switch`
+- 同账户同日其他 draft/approved/executed（合并敞口）
 
 ## 输出
 - `risk_decision`；`portfolio_target.status` ∈ {approved, rejected}
@@ -42,13 +43,16 @@
 ## 硬规则（v1_default）
 - 单票权重 / 持仓只数 / 总敞口 / Kill Switch
 - 整手校验用 `cost_params.lot_size`（默认 100）
+- **账户级**：同账户同日多策略目标腿按 `target_value` 合并后，相对合计 `nav` 再验单票与总敞口
 
 | code | 含义 |
 | --- | --- |
 | `KILL_SWITCH_ON` | GLOBAL 或账户 Kill Switch 开启 |
-| `MAX_SINGLE_WEIGHT` | 单票权重 > 15% |
+| `MAX_SINGLE_WEIGHT` | 单票权重 > 15%（本策略） |
 | `MAX_NAMES` / `MIN_NAMES` | 持仓只数越界 |
-| `MAX_GROSS_EXPOSURE` | invested/nav > 101% |
+| `MAX_GROSS_EXPOSURE` | invested/nav > 101%（本策略） |
+| `ACCOUNT_MAX_SINGLE_WEIGHT` | 账户合并单票权重超限 |
+| `ACCOUNT_MAX_GROSS_EXPOSURE` | 账户合并总敞口超限 |
 | `CANNOT_BUY` | 目标股数>0 但 can_buy≠1 |
 | `LOT_SIZE` | 股数非整手（按 `cost_params.lot_size`） |
 
@@ -68,4 +72,5 @@ python -m risk_engine.selfcheck
 ## 不变量
 - kill switch=on 或未 approved → execution 禁止新开仓
 - 否决原因落库可审计（`breaches_json`）
+- Kill 解除后：曾因 Kill 否决的组合可无 `--force` 重审
 - 模块间不 import 业务内部实现；经库交接

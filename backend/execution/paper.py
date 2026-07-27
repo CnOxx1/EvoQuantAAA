@@ -153,14 +153,27 @@ def simulate_paper_fills(
     intents: list[dict[str, Any]],
     cost: CostSnapshot,
     trade_date: str,
+    cash: float | None = None,
+    lot_size: int = 100,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     返回 (orders, fills)。
-    orders 含 status NEW/REJECTED/FILLED；fills 仅成交。
+    先处理 SELL 回笼现金，再 BUY；cash 非 None 时禁止透支（整手缩量或 reject）。
     """
     orders: list[dict[str, Any]] = []
     fills: list[dict[str, Any]] = []
-    for it in intents:
+    cash_left = None if cash is None else float(cash)
+    lot = max(1, int(lot_size))
+
+    ordered = sorted(
+        intents,
+        key=lambda it: (
+            0 if str(it.get("side")) == "SELL" else 1,
+            str(it.get("symbol") or ""),
+        ),
+    )
+
+    for it in ordered:
         side = str(it["side"])
         qty = float(it["qty"])
         if it.get("reject"):
@@ -177,10 +190,84 @@ def simulate_paper_fills(
             continue
         mid = float(it["mid_price"])
         px = fill_price(side, mid, cost)
+
+        if side == "SELL":
+            amount = qty * px
+            slip = abs(px - mid) * qty
+            comm = commission(amount, cost)
+            stamp = amount * cost.stamp_tax_rate
+            if cash_left is not None:
+                cash_left += amount - comm - stamp
+            orders.append(
+                {
+                    "symbol": it["symbol"],
+                    "side": side,
+                    "qty": qty,
+                    "limit_price": mid,
+                    "status": "FILLED",
+                    "reason": None,
+                }
+            )
+            fills.append(
+                {
+                    "symbol": it["symbol"],
+                    "side": side,
+                    "qty": qty,
+                    "price": px,
+                    "amount": amount,
+                    "commission": comm,
+                    "stamp_tax": stamp,
+                    "slippage_cost": slip,
+                    "trade_date": trade_date[:10],
+                }
+            )
+            continue
+
+        # BUY
+        if cash_left is not None:
+            # 最大可买整手：fill_price 已含滑点；佣金用迭代压到可负担
+            unit = px
+            max_by_cash = int(cash_left / unit + 1e-9) if unit > 0 else 0
+            max_lot = (max_by_cash // lot) * lot
+            while max_lot >= lot:
+                amount_try = max_lot * unit
+                comm_try = commission(amount_try, cost)
+                if amount_try + comm_try <= cash_left + 1e-9:
+                    break
+                max_lot -= lot
+            if max_lot < lot or max_lot + 1e-9 < qty:
+                if max_lot < lot:
+                    orders.append(
+                        {
+                            "symbol": it["symbol"],
+                            "side": side,
+                            "qty": qty,
+                            "limit_price": mid,
+                            "status": "REJECTED",
+                            "reason": "insufficient_cash",
+                        }
+                    )
+                    continue
+                qty = float(max_lot)
+
         amount = qty * px
         slip = abs(px - mid) * qty
         comm = commission(amount, cost)
-        stamp = amount * cost.stamp_tax_rate if side == "SELL" else 0.0
+        if cash_left is not None:
+            if amount + comm > cash_left + 1e-9:
+                orders.append(
+                    {
+                        "symbol": it["symbol"],
+                        "side": side,
+                        "qty": float(it["qty"]),
+                        "limit_price": mid,
+                        "status": "REJECTED",
+                        "reason": "insufficient_cash",
+                    }
+                )
+                continue
+            cash_left -= amount + comm
+
         orders.append(
             {
                 "symbol": it["symbol"],
@@ -188,7 +275,7 @@ def simulate_paper_fills(
                 "qty": qty,
                 "limit_price": mid,
                 "status": "FILLED",
-                "reason": None,
+                "reason": "clamped_cash" if qty + 1e-9 < float(it["qty"]) else None,
             }
         )
         fills.append(
@@ -199,7 +286,7 @@ def simulate_paper_fills(
                 "price": px,
                 "amount": amount,
                 "commission": comm,
-                "stamp_tax": stamp,
+                "stamp_tax": 0.0,
                 "slippage_cost": slip,
                 "trade_date": trade_date[:10],
             }

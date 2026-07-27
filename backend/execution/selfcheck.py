@@ -75,6 +75,39 @@ def _run_mock() -> None:
         intents=sell_intents, cost=cost, trade_date="2026-07-23"
     )
     assert sell_fills[0]["stamp_tax"] > 0
+
+    # 现金约束：零成本下先卖后买，0 现金也能买
+    cost0 = CostSnapshot(
+        version="t0",
+        commission_rate=0.0,
+        min_commission=0.0,
+        stamp_tax_rate=0.0,
+        slippage_rate=0.0,
+    )
+    orders_c, fills_c = simulate_paper_fills(
+        intents=[
+            {
+                "symbol": "X",
+                "side": "BUY",
+                "qty": 100,
+                "reject": False,
+                "mid_price": 10.0,
+            },
+            {
+                "symbol": "Y",
+                "side": "SELL",
+                "qty": 100,
+                "reject": False,
+                "mid_price": 10.0,
+            },
+        ],
+        cost=cost0,
+        trade_date="2026-07-23",
+        cash=0.0,
+        lot_size=100,
+    )
+    assert all(o["status"] == "FILLED" for o in orders_c)
+    assert len(fills_c) == 2
     print("mock_cases=ok")
 
 

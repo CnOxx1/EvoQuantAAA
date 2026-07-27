@@ -204,6 +204,24 @@ python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
 > 维护约定：有可合并的功能/数据里程碑时，在本节**顶部**追加一条（新→旧）。  
 > 格式：日期 · 标题 · 要点列表 ·（可选）影响范围。
 
+### 2026-07-27 · 阶段 15：策略 sleeve 与回测对齐
+- ledger：`ledger_sleeve_position` + `ledger_lot.strategy_version`；execution 差额仅对本策略
+- CLI：每个 committed execution 立即 post；已过账禁止 `--force`
+- portfolio live：非调仓日 hold；schedule：signal failed 短路
+- backtest：FIFO lot T+1 + 未复权 `close` 成交；迁移 `031`
+- 数据说明：031 把旧 POSITION 回填到 `strategy_version=''`；新仓用真实 version。开发账户若双 sleeve 并存，合计 NAV 可能偏高（见 `ledger/README`）
+
+### 2026-07-27 · 阶段 14：量化正确性 Critical
+- schedule：`factor_refresh` 在 `signal_live` 前重算 LIVE 因子；失败跳过交易链 → `degraded`
+- execution：成交前现金投影（先卖后买 / `insufficient_cash` / `clamped_cash`）
+- portfolio：`strategy_capital_alloc` 同账户配额；sizing/成交用未复权 `close`；目标腿落 `can_sell`
+- risk：同账户同日合并敞口（`ACCOUNT_MAX_*`）；迁移 `030`
+
+### 2026-07-27 · 阶段 13：编排与执行硬化补丁
+- execution：order/fill/run/portfolio 状态同事务提交
+- schedule：`security_master` 失败跳过交易链 → `degraded`；告警 failed=error / degraded=warning
+- API：`ASHARE_API_REQUIRE_TOKEN=1`；Kill 解除后可重审
+
 ### 2026-07-27 · 阶段 12：E2E + console 只读页
 - `python main.py e2e`：自备种子 register→…→ledger→API，幂等断言
 - `frontend/console`：静态页拉 `/v1`；gateway CORS 放开本地静态源

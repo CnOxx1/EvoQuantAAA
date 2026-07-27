@@ -150,26 +150,56 @@ def notify_round(
     job_id: str,
     as_of: str,
     since: str,
+    schedule_status: str = "committed",
+    schedule_message: str = "",
 ) -> dict[str, Any]:
     failures = collect_failures(since=since, job_id=job_id)
+    # 编排级状态：failed → error；degraded → warning（与 batch 失败区分）
+    if schedule_status == "failed":
+        failures.append(
+            {
+                "source": "schedule",
+                "ref_id": job_id,
+                "severity": "error",
+                "message": schedule_message or "schedule failed",
+                "detail": {"schedule_status": schedule_status},
+            }
+        )
+    elif schedule_status == "degraded":
+        failures.append(
+            {
+                "source": "schedule",
+                "ref_id": job_id,
+                "severity": "warning",
+                "message": schedule_message or "schedule degraded (CORE ok)",
+                "detail": {"schedule_status": schedule_status},
+            }
+        )
     alert_ids = write_alerts(failures, job_id=job_id)
     summary = {
         "job_id": job_id,
         "as_of": as_of,
+        "schedule_status": schedule_status,
         "failure_count": len(failures),
         "alert_ids": alert_ids,
         "failures": [
-            {"source": f["source"], "ref_id": f.get("ref_id"), "message": f["message"]}
+            {
+                "source": f["source"],
+                "ref_id": f.get("ref_id"),
+                "severity": f.get("severity"),
+                "message": f["message"],
+            }
             for f in failures
         ],
     }
     lines = [
         "=" * 60,
-        f"OPS ALERT SUMMARY job={job_id} as_of={as_of}",
+        f"OPS ALERT SUMMARY job={job_id} as_of={as_of} status={schedule_status}",
         f"failures={len(failures)} alerts_written={len(alert_ids)}",
     ]
     for f in failures[:20]:
-        lines.append(f"  - [{f['source']}] {f['ref_id']}: {f['message']}")
+        sev = f.get("severity") or "error"
+        lines.append(f"  - [{sev}/{f['source']}] {f['ref_id']}: {f['message']}")
     if not failures:
         lines.append("  (no failures)")
     lines.append("=" * 60)

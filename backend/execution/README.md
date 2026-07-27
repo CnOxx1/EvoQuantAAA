@@ -23,7 +23,7 @@
 | database | `../../database/README.md` | 订单事件表 | 上游契约 |
 | risk_engine | `../risk_engine/README.md` | 放行/Kill Switch | 上游硬依赖（经库） |
 | portfolio_construct | `../portfolio_construct/README.md` | 目标持仓 | 间接上游 |
-| ledger | `../ledger/README.md` | 账本过账 | 下游（读 fill；已落地） |
+| ledger | `../ledger/README.md` | 账本过账 | 下游；CLI 每单立即 post |
 | ops_monitor | `../ops_monitor/README.md` | 对账 | 同级 |
 | orchestrator | `../orchestrator/README.md` | 日更 | `schedule` 跑 approved |
 | frontend/trade | `../../frontend/trade/README.md` | 交易 UI | 下游 |
@@ -32,22 +32,13 @@
 - 做：门禁（approved + risk_decision + kill off）→ 纸面意图 → `order_event`/`fill_event`；成功后 `portfolio_target.status=executed`。
 - 不做：直接改现金/持仓余额（属 ledger）；实盘柜台；绕过 risk。
 
-## 输入
-- `portfolio_id`（status=approved）
-- 最新 `risk_decision=approved`
-- `kill_switch` off
-- `cost_params`、目标持仓腿
-
-## 输出
-- `execution_run` / `order_event` / `fill_event`
-- portfolio → `executed`
-
 ## 纸面口径
-- 读 `ledger_balance` 当前持仓，按目标股数做**差额** BUY/SELL（`assumption=ledger_delta_to_target`）
-- SELL 受 `ledger_lot` T+1 可卖上限约束（超量压缩或 reject）
-- 买价 `mid*(1+slippage)`，卖价 `mid*(1-slippage)`；印花税仅 SELL
-- 佣金 `max(amount*rate, min_commission)`
-- 同 portfolio 已有 `running` 则 blocked（`--force` 标记失败后可重跑）
+- 读 **本策略 sleeve**（`ledger_sleeve_position` / `ledger_lot.strategy_version`）做差额 BUY/SELL
+- 现金仍为账户级；先卖后买；不足则 `insufficient_cash` / `clamped_cash`
+- SELL 受本策略 T+1 lot + `can_sell` 约束
+- 成交价优先未复权 `close`
+- **CLI**：每个 `committed` execution 后立即调用 ledger post（防同日多组合抢同一未过账快照）
+- 已有 committed posting 的 portfolio **禁止 `--force` 重跑**
 
 ## 运行
 
@@ -56,11 +47,10 @@ cd backend
 python main.py execution run --portfolio pf_xxx
 python main.py execution run --approved --as-of 2026-07-23
 python main.py execution list
-python main.py execution show --execution ex_xxx
 python -m execution.selfcheck
 ```
 
 ## 不变量
+- 差额只对本 `strategy_version` sleeve，不得卖他策略持仓
 - 每次执行前检查 approved + risk_decision + kill switch
-- 只写事件，不直接过账
-- 模块间不 import 业务内部实现；经库交接
+- 只写事件；过账由 ledger（CLI 串联）

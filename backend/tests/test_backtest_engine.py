@@ -25,6 +25,7 @@ def _bar(sym, d, px, can_buy=1, can_sell=1):
     return {
         "symbol": sym,
         "trade_date": d,
+        "close": px,
         "adj_close": px,
         "can_buy": can_buy,
         "can_sell": can_sell,
@@ -42,6 +43,29 @@ def test_t1_blocks_same_day_sell():
         target_weights={"2026-07-01": {"A": 0.5, "B": 0.5}},
     )
     assert not any(t["side"] == "SELL" for t in out.trades)
+
+
+def test_addon_buy_lot_t1_same_day():
+    """加仓不刷新旧 lot 的 buy_date：当日新买入部分不可卖。"""
+    cost = _cost(commission_rate=0.0, min_commission=0.0, stamp_tax_rate=0.0)
+    bars = [
+        _bar("A", "2026-07-01", 10.0),
+        _bar("A", "2026-07-02", 10.0),
+    ]
+    # day1: 50% A → ~5万股；day2: 100% A → 再买；若错误用最早 buy_date 会允许卖全部
+    # 我们断言 day2 没有 SELL（因为从半仓加到满仓只需买）
+    out = run_target_weights(
+        bars=bars,
+        index_bars=[],
+        cost=cost,
+        initial_cash=1_000_000,
+        target_weights={
+            "2026-07-01": {"A": 0.5},
+            "2026-07-02": {"A": 1.0},
+        },
+    )
+    assert not any(t["side"] == "SELL" for t in out.trades)
+    assert any(t["side"] == "BUY" and t["trade_date"] == "2026-07-02" for t in out.trades)
 
 
 def test_t1_allows_next_day_sell():

@@ -630,6 +630,11 @@ def cmd_execution(args: argparse.Namespace) -> int:
         print("status=invalid message=需要 --portfolio 或 --approved")
         return 2
 
+    # C2：每个 committed execution 立即过账，避免同日多组合共享未过账快照
+    from ledger.models import PostRequest
+    from ledger.service import LedgerService
+
+    ledger = LedgerService()
     exit_code = 0
     for result in results:
         print(
@@ -641,6 +646,23 @@ def cmd_execution(args: argparse.Namespace) -> int:
             print(f"message={result.message}")
         if result.status not in ("committed", "skipped"):
             exit_code = 2
+            continue
+        if result.status == "committed" and result.execution_id:
+            post = ledger.post(
+                PostRequest(
+                    execution_id=result.execution_id,
+                    account_id=result.account_id or None,
+                    job_id=args.job_id,
+                )
+            )
+            print(
+                f"post_status={post.status} posting={post.posting_id} "
+                f"entries={post.entry_count} cash_after={post.cash_after}"
+            )
+            if post.message:
+                print(f"post_message={post.message}")
+            if post.status not in ("committed", "skipped"):
+                exit_code = 2
     return exit_code
 
 

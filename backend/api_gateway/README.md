@@ -56,7 +56,8 @@
 | GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 |
 | GET | `/v1/ops/alerts` | 告警 |
 
-鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。
+鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。  
+生产建议：`ASHARE_API_REQUIRE_TOKEN=1`（未配置 token 时一律 401）。  
 CORS：本地 console / Vite 源（含 `null` 用于 `file://`）。
 
 ## 运行

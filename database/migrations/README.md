@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`029`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`031`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -36,6 +36,8 @@
 | `027_ledger.sql` | `ledger_account` / `ledger_posting` / `ledger_entry` / `ledger_balance` / `ledger_lot` |
 | `028_api_gateway.sql` | `api_audit_log`（网关写操作审计） |
 | `029_prod_hardening.sql` | 组合按日活跃唯一；execution/ledger `running` 唯一 |
+| `030_quant_correctness.sql` | `portfolio_target_position.can_sell`；`strategy_capital_alloc` |
+| `031_strategy_sleeve.sql` | `ledger_sleeve_position`；`ledger_lot.strategy_version` |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

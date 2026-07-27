@@ -99,7 +99,8 @@
 | signal_batch | oltp | signal_prod | portfolio_construct, ops_monitor | signal_batch_id | PAPER/LIVE 运行批次 |
 | signal_prod_weight | oltp | signal_prod | portfolio_construct, backtest | (strategy_version, trade_date, symbol) | 调仓日目标权重；幂等 |
 | portfolio_target | oltp | portfolio_construct | risk_engine, execution | portfolio_id | draft→approved/rejected→executed；`(version,as_of,account)` 活跃唯一 |
-| portfolio_target_position | oltp | portfolio_construct | risk_engine, execution | (portfolio_id, symbol) | 整手目标股数/市值 |
+| portfolio_target_position | oltp | portfolio_construct | risk_engine, execution | (portfolio_id, symbol) | 整手目标股数/市值；含 `can_buy`/`can_sell` |
+| strategy_capital_alloc | oltp | portfolio_construct（配额） | portfolio_construct | (account_id, strategy_version) | 同账户多策略资本权重；缺省等权 |
 | risk_decision | oltp | risk_engine | execution | decision_id | approved/rejected；同步 portfolio 状态 |
 | kill_switch | oltp | risk_engine | execution | scope_key | GLOBAL 或 account_id；下单前必读 |
 | risk_limits | ref_data | migrations 种子 | risk_engine | version | 单票/只数/敞口限额 |
@@ -109,8 +110,9 @@
 | ledger_account | oltp | ledger | portfolio_construct, risk_engine | account_id | 账户；种子 paper_default |
 | ledger_posting | oltp | ledger | ops_monitor | posting_id | 按 execution 幂等；分录与 committed 同事务 |
 | ledger_entry | oltp | ledger | ops_monitor | entry_id | 分录 |
-| ledger_balance | oltp | ledger | execution, portfolio_construct, risk_engine | (account_id, asset_type, symbol) | 现金/持仓 |
-| ledger_lot | oltp | ledger | execution, ops_monitor | lot_id | T+1 FIFO |
+| ledger_balance | oltp | ledger | execution, portfolio_construct, risk_engine | (account_id, asset_type, symbol) | 现金 / 账户合计持仓 |
+| ledger_lot | oltp | ledger | execution, ops_monitor | lot_id | T+1 FIFO；含 `strategy_version` |
+| ledger_sleeve_position | oltp | ledger | execution | (account_id, strategy_version, symbol) | 策略 sleeve 持仓隔离；`''` 为 031 回填的历史仓 |
 | api_audit_log | oltp | api_gateway | ops_monitor | audit_id | 网关写操作审计 |
 | cost_params | ref_data | migrations 种子 | backtest, execution, ledger | version | 统一费用口径 |
 | backtest_run | oltp | backtest | frontend/backtest_view, research_lab, ops_monitor | run_id | running→committed/failed |

@@ -18,6 +18,10 @@ class PortfolioBuildRequest:
     force: bool = False
     # None=用请求 nav；True=用账本权益估算覆盖 nav
     use_ledger_nav: bool = False
+    # 同账户资本配额（build_all_runnable 写入；单次 build 可选）
+    capital_weight: float | None = None
+    # True：仅当 signal_trade_date == as_of 才新建（非调仓日 hold）
+    require_signal_as_of: bool = False
     job_id: str | None = None
 
 

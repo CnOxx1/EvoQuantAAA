@@ -18,6 +18,19 @@ class EngineOutput:
     symbols_used: list[str] = field(default_factory=list)
 
 
+def _trade_px(bar: dict[str, Any] | None) -> float | None:
+    """成交/整手定价：优先未复权 close，缺则 adj_close。"""
+    if not bar:
+        return None
+    px = bar.get("close")
+    if px is None:
+        px = bar.get("adj_close")
+    if px is None:
+        return None
+    v = float(px)
+    return v if v > 0 else None
+
+
 def _commission(amount: float, cost: CostParams) -> float:
     return max(abs(amount) * cost.commission_rate, cost.min_commission)
 
@@ -29,9 +42,9 @@ def _mark_to_market(
     for sym, sh in positions.items():
         if sh <= 0:
             continue
-        b = day_bars.get(sym)
-        if b and b.get("adj_close") is not None:
-            mv += sh * float(b["adj_close"])
+        px = _trade_px(day_bars.get(sym))
+        if px is not None:
+            mv += sh * px
     return mv
 
 
@@ -39,6 +52,47 @@ def _lot_shares(value: float, px: float, lot: int) -> int:
     if px <= 0 or lot <= 0 or value <= 0:
         return 0
     return int(value // (px * lot)) * lot
+
+
+def _sellable_from_lots(
+    lots: list[dict[str, Any]], *, symbol: str, as_of: str
+) -> float:
+    day = as_of[:10]
+    return sum(
+        float(l["qty"])
+        for l in lots
+        if str(l["symbol"]) == symbol and str(l["buy_date"])[:10] < day and float(l["qty"]) > 0
+    )
+
+
+def _fifo_take(
+    lots: list[dict[str, Any]], *, symbol: str, qty: float, as_of: str
+) -> float:
+    """从 lots 按 FIFO 扣减可卖量，返回实际扣减。"""
+    need = float(qty)
+    if need <= 0:
+        return 0.0
+    day = as_of[:10]
+    idxs = [
+        i
+        for i, l in enumerate(lots)
+        if str(l["symbol"]) == symbol
+        and float(l["qty"]) > 0
+        and str(l["buy_date"])[:10] < day
+    ]
+    idxs.sort(key=lambda i: (str(lots[i]["buy_date"])[:10], i))
+    taken = 0.0
+    for i in idxs:
+        if need <= 1e-12:
+            break
+        rem = float(lots[i]["qty"])
+        use = min(rem, need)
+        lots[i]["qty"] = rem - use
+        need -= use
+        taken += use
+    # 清理空 lot
+    lots[:] = [l for l in lots if float(l["qty"]) > 1e-12]
+    return taken
 
 
 def _aligned_to_target(
@@ -57,13 +111,11 @@ def _aligned_to_target(
     symbols = set(positions) | set(target)
     for sym in symbols:
         tw = float(target.get(sym, 0.0))
-        b = day_bars.get(sym)
-        if not b or b.get("adj_close") is None or float(b["adj_close"]) <= 0:
-            # 无行情：持有股若目标为 0 则无法卖出，不算对齐
+        px = _trade_px(day_bars.get(sym))
+        if px is None:
             if positions.get(sym, 0.0) > 0 and tw <= 0:
                 return False
             continue
-        px = float(b["adj_close"])
         cur = float(positions.get(sym, 0.0))
         want = _lot_shares(nav * tw, px, cost.lot_size)
         if abs(cur - want) >= cost.lot_size:
@@ -85,7 +137,8 @@ def run_target_weights(
 
     - 目标日写入 pending；未对齐时逐日重试（跌停/T+1 顺延），对齐后清空以免日更微扰
     - 先卖后买；卖出计佣金+印花税；买入仅佣金；滑点计入成交价
-    - T+1：buy_date < 当日才可卖；can_sell/can_buy 约束成交
+    - T+1：按买入批次 FIFO（加仓不合并最早 buy_date）
+    - 成交价优先未复权 close
     """
     by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for b in bars:
@@ -103,7 +156,7 @@ def run_target_weights(
 
     cash = float(initial_cash)
     positions: dict[str, float] = {}
-    buy_dates: dict[str, str] = {}
+    lots: list[dict[str, Any]] = []  # {symbol, buy_date, qty}
     trades: list[dict[str, Any]] = []
     nav_rows: list[dict[str, Any]] = []
     peak = initial_cash
@@ -126,12 +179,9 @@ def run_target_weights(
             for sym in sorted(set(positions) | set(pending)):
                 tw = float(pending.get(sym, 0.0))
                 cur = float(positions.get(sym, 0.0))
-                b = day_bars.get(sym)
-                if cur <= 0:
+                px_ref = _trade_px(day_bars.get(sym))
+                if cur <= 0 or px_ref is None:
                     continue
-                if not b or b.get("adj_close") is None or float(b["adj_close"]) <= 0:
-                    continue
-                px_ref = float(b["adj_close"])
                 want = _lot_shares(nav0 * tw, px_ref, cost.lot_size) if tw > 0 else 0
                 delta = want - cur
                 if delta < 0:
@@ -141,23 +191,26 @@ def run_target_weights(
                 b = day_bars[sym]
                 if int(b.get("can_sell") or 0) != 1:
                     continue
-                bought = buy_dates.get(sym)
-                if bought is None or bought >= d:
-                    continue  # T+1
-                sh = min(float(positions.get(sym, 0.0)), shares_to_sell)
+                avail = _sellable_from_lots(lots, symbol=sym, as_of=d)
+                sh = min(float(positions.get(sym, 0.0)), shares_to_sell, avail)
                 sh = int(sh // cost.lot_size) * cost.lot_size
                 if sh <= 0:
                     continue
-                px = float(b["adj_close"]) * (1.0 - cost.slippage_rate)
+                px_ref = _trade_px(b)
+                if px_ref is None:
+                    continue
+                px = px_ref * (1.0 - cost.slippage_rate)
                 amount = sh * px
                 fee_c = _commission(amount, cost)
                 fee_stamp = amount * cost.stamp_tax_rate
                 fee = fee_c + fee_stamp
+                taken = _fifo_take(lots, symbol=sym, qty=sh, as_of=d)
+                if abs(taken - sh) > 1e-6:
+                    continue
                 cash += amount - fee
                 positions[sym] = positions.get(sym, 0.0) - sh
-                if positions[sym] <= 0:
+                if positions[sym] <= 1e-12:
                     positions.pop(sym, None)
-                    buy_dates.pop(sym, None)
                 trades.append(
                     {
                         "trade_date": d,
@@ -180,11 +233,12 @@ def run_target_weights(
                 if tw <= 0:
                     continue
                 b = day_bars.get(sym)
-                if not b or b.get("adj_close") is None or float(b["adj_close"]) <= 0:
+                px_ref = _trade_px(b)
+                if px_ref is None:
                     continue
                 if int(b.get("can_buy") or 0) != 1:
                     continue
-                px = float(b["adj_close"]) * (1.0 + cost.slippage_rate)
+                px = px_ref * (1.0 + cost.slippage_rate)
                 cur = float(positions.get(sym, 0.0))
                 want = _lot_shares(nav1 * tw, px, cost.lot_size)
                 need = want - cur
@@ -219,10 +273,10 @@ def run_target_weights(
                     if amount + fee > cash + 1e-9:
                         continue
                     cash -= amount + fee
-                    if positions.get(sym, 0.0) <= 0:
-                        buy_dates[sym] = d
-                    # 加仓保留最早 buy_date
                     positions[sym] = positions.get(sym, 0.0) + adj_sh
+                    lots.append(
+                        {"symbol": sym, "buy_date": d, "qty": float(adj_sh)}
+                    )
                     symbols_used.add(sym)
                     trades.append(
                         {
@@ -304,9 +358,7 @@ def build_ew_target_weights(
         buyable = [
             str(b["symbol"])
             for b in by_date[d]
-            if int(b.get("can_buy") or 0) == 1
-            and b.get("adj_close") is not None
-            and float(b["adj_close"]) > 0
+            if int(b.get("can_buy") or 0) == 1 and _trade_px(b) is not None
         ]
         buyable = sorted(set(buyable))
         if not buyable:
@@ -380,7 +432,7 @@ def build_factor_top_n_targets(
 
     by_date: dict[str, set[str]] = defaultdict(set)
     for b in bars:
-        if b.get("adj_close") is None:
+        if _trade_px(b) is None:
             continue
         by_date[str(b["trade_date"])[:10]].add(str(b["symbol"]))
     dates = sorted(by_date.keys())
