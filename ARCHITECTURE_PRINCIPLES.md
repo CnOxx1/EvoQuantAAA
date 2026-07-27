@@ -42,9 +42,10 @@
 | backtest | `backend/backtest/` | A 股约束回测与报告 |
 | portfolio_construct | `backend/portfolio_construct/` | 组合构建 → 目标持仓（草稿） |
 | risk_engine | `backend/risk_engine/` | 事前/硬风控、Kill Switch；可否决执行 |
-| execution | `backend/execution/` | OMS：委托生命周期与柜台适配 |
-| ledger | `backend/ledger/` | 资金持仓账本过账（含 T+1 可卖） |
+| execution | `backend/execution/` | OMS：委托/成交事件（当前 paper；柜台适配器待接） |
+| ledger | `backend/ledger/` | 资金持仓过账；T+1 lot；**策略 sleeve 隔离持仓** |
 | ops_monitor | `backend/ops_monitor/` | 监控、对账、告警、受控重跑 |
+| e2e | `backend/e2e/` | 生产链路短窗回归（自备种子） |
 
 已废弃目录名（勿再使用）：`research_factor`、`portfolio_risk`。
 
@@ -60,7 +61,9 @@
 4. **DQ 门禁**：`data_quality` 未通过的批次，不得被 `research_lab` / `signal_prod` 消费。  
 5. **研究/生产隔离**：实验产出不得直接进 `execution`；须经 `strategy_registry` 晋升后由 `signal_prod` 生成。  
 6. **风控硬否决**：`risk_engine` 未放行或 Kill Switch 开启时，`execution` 不得新开仓。  
-7. **OMS ≠ 账本**：`execution` 写订单/成交事件；`ledger` 负责过账与可卖数量。
+7. **OMS ≠ 账本**：`execution` 写订单/成交事件；`ledger` 负责过账与可卖数量。  
+8. **多策略同账户**：现金共享，持仓按 `strategy_version` sleeve 隔离；差额成交不得动他策略仓。  
+9. **成交价口径**：纸面 sizing/fill 优先未复权 `close`（与回测引擎对齐）；复权价用于收益/因子。
 
 ### 3.2 允许
 
@@ -78,11 +81,12 @@
       → data_process(processed)
       → data_quality(gate)
       → research_lab(实验) → strategy_registry(晋升)
+      → [schedule] factor_refresh（LIVE 因子日刷）
       → signal_prod(生产信号, strategy_version)
-      → portfolio_construct(目标持仓草稿)
-      → risk_engine(放行/否决/kill switch)
-      → [可选人工确认] → execution(订单事件)
-      → ledger(过账) → ops_monitor(对账)
+      → portfolio_construct(目标持仓草稿；非调仓日 hold)
+      → risk_engine(放行/否决/kill switch / 账户合并敞口)
+      → [可选人工确认] → execution(订单事件；sleeve 差额；现金约束)
+      → ledger(过账；可与 execution CLI 串联即时 post) → ops_monitor(对账)
 
 全程由 orchestrator 调度（只传 ID）；
 对外查询/操作经 api_gateway；
@@ -151,28 +155,18 @@
 大a/
 ├── README.md
 ├── ARCHITECTURE_PRINCIPLES.md
+├── DEVELOPMENT_PLAN.md
 ├── frontend/
-│   ├── console/ research/ backtest_view/ portfolio/ trade/ ops/
+│   └── console/          # 只读运维台（其余前端目录按需）
 ├── backend/
-│   ├── shared/
-│   ├── api_gateway/
-│   ├── orchestrator/
-│   ├── security_master/
-│   ├── data_ingest/
-│   ├── data_process/
-│   ├── data_quality/
-│   ├── research_lab/
-│   ├── signal_prod/
-│   ├── strategy_registry/
-│   ├── backtest/
-│   ├── portfolio_construct/
-│   ├── risk_engine/
-│   ├── execution/
-│   ├── ledger/
-│   └── ops_monitor/
+│   ├── shared/ api_gateway/ orchestrator/ security_master/
+│   ├── data_ingest/ data_process/ data_quality/
+│   ├── research_lab/ signal_prod/ strategy_registry/ backtest/
+│   ├── portfolio_construct/ risk_engine/ execution/ ledger/
+│   ├── ops_monitor/ e2e/ tests/
 └── database/
-    ├── migrations/
-    ├── schema/          # 含产消登记
+    ├── migrations/       # 001–031
+    ├── schema/           # 产消登记
     └── seeds/
 ```
 
@@ -193,4 +187,4 @@
 
 ## 7. 最终表述
 
-系统分 `frontend`、`backend`、`database` 三部分；后端按交易真相模块拆分；跨模块数据经库交接、编排只传引用；研究与生产隔离；账本与 OMS 分离；风控可否决执行；每一文件夹维护统一 README 供多 Agent 协作。
+系统分 `frontend`、`backend`、`database` 三部分；后端按交易真相模块拆分；跨模块数据经库交接、编排只传引用；研究与生产隔离；账本与 OMS 分离（纸面执行 + 策略 sleeve）；风控可否决执行；每一文件夹维护统一 README 供多 Agent 协作。
