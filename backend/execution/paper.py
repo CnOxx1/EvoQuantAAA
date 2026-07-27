@@ -292,3 +292,124 @@ def simulate_paper_fills(
             }
         )
     return orders, fills
+
+
+def compute_residuals(
+    *,
+    intents: list[dict[str, Any]],
+    orders: list[dict[str, Any]],
+    fills: list[dict[str, Any]],
+    lot_size: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    意图数量 − 成交数量 → 残差（至少一整手才保留）。
+    REJECTED / clamped_* 的未成交部分进入 pending。
+    """
+    lot = max(1, int(lot_size))
+    filled_by: dict[tuple[str, str], float] = {}
+    for f in fills:
+        key = (str(f["symbol"]), str(f["side"]))
+        filled_by[key] = filled_by.get(key, 0.0) + float(f["qty"])
+
+    reason_by: dict[tuple[str, str], str | None] = {}
+    for o in orders:
+        key = (str(o["symbol"]), str(o["side"]))
+        # 保留最后一条非空 reason（如 clamped_cash / insufficient_cash）
+        reason_by[key] = o.get("reason") or reason_by.get(key)
+
+    residuals: list[dict[str, Any]] = []
+    for it in intents:
+        sym = str(it["symbol"])
+        side = str(it["side"])
+        key = (sym, side)
+        intended = float(it["qty"])
+        filled = float(filled_by.get(key, 0.0))
+        rem = intended - filled
+        if rem + 1e-9 < lot:
+            continue
+        reason = it.get("reason") if it.get("reject") else reason_by.get(key)
+        if reason is None and rem > 1e-9:
+            reason = "unfilled_residual"
+        residuals.append(
+            {
+                "symbol": sym,
+                "side": side,
+                "qty_remaining": rem,
+                "qty_origin": intended,
+                "last_reason": reason,
+            }
+        )
+    return residuals
+
+
+def build_pending_intents(
+    *,
+    pendings: list[dict[str, Any]],
+    bars: dict[str, dict[str, Any]],
+    sellable_shares: dict[str, float] | None,
+) -> list[dict[str, Any]]:
+    """将 open pending 转为当日纸面意图（再套 can_* / T+1）。"""
+    intents: list[dict[str, Any]] = []
+    for p in pendings:
+        sym = str(p["symbol"])
+        side = str(p["side"])
+        qty = float(p["qty_remaining"])
+        b = bars.get(sym) or {}
+        px = b.get("close") if b.get("close") is not None else b.get("adj_close")
+        if px is None or float(px) <= 0:
+            intents.append(
+                {
+                    "symbol": sym,
+                    "side": side,
+                    "qty": qty,
+                    "reject": True,
+                    "reason": "missing_price",
+                }
+            )
+            continue
+        px_f = float(px)
+        if side == "BUY":
+            if int(b.get("can_buy") or 0) != 1:
+                intents.append(
+                    {
+                        "symbol": sym,
+                        "side": side,
+                        "qty": qty,
+                        "reject": True,
+                        "reason": "cannot_buy",
+                        "mid_price": px_f,
+                    }
+                )
+                continue
+            intents.append(
+                {
+                    "symbol": sym,
+                    "side": side,
+                    "qty": qty,
+                    "reject": False,
+                    "mid_price": px_f,
+                }
+            )
+        else:
+            if int(b.get("can_sell") if b.get("can_sell") is not None else 1) != 1:
+                intents.append(
+                    {
+                        "symbol": sym,
+                        "side": side,
+                        "qty": qty,
+                        "reject": True,
+                        "reason": "cannot_sell",
+                        "mid_price": px_f,
+                    }
+                )
+                continue
+            intents.append(
+                {
+                    "symbol": sym,
+                    "side": side,
+                    "qty": qty,
+                    "reject": False,
+                    "mid_price": px_f,
+                }
+            )
+    return apply_sellable_limits(intents, sellable_shares=sellable_shares)

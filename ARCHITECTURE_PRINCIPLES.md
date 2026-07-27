@@ -165,7 +165,7 @@
 │   ├── portfolio_construct/ risk_engine/ execution/ ledger/
 │   ├── ops_monitor/ e2e/ tests/
 └── database/
-    ├── migrations/       # 001–032
+    ├── migrations/       # 001–033
     ├── schema/           # 产消登记
     └── seeds/
 ```

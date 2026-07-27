@@ -573,6 +573,23 @@ def cmd_execution(args: argparse.Namespace) -> int:
     svc = ExecutionService()
     action = args.execution_action
 
+    if action == "list-pending":
+        st = None if (args.status or "").lower() == "all" else args.status
+        rows = svc.repo.list_pending(
+            account_id=args.account,
+            status=st,
+            limit=int(args.limit),
+        )
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(
+                f"pending={r.get('pending_id')} acct={r.get('account_id')} "
+                f"sv={r.get('strategy_version')} {r.get('side')} {r.get('symbol')} "
+                f"qty={r.get('qty_remaining')} st={r.get('status')} "
+                f"reason={r.get('last_reason')}"
+            )
+        return 0
+
     if action == "list":
         rows = svc.repo.list_runs(
             portfolio_id=args.portfolio,
@@ -584,7 +601,8 @@ def cmd_execution(args: argparse.Namespace) -> int:
             print(
                 f"execution={r.get('execution_id')} portfolio={r.get('portfolio_id')} "
                 f"status={r.get('status')} orders={r.get('order_count')} "
-                f"fills={r.get('fill_count')} as_of={r.get('as_of_date')}"
+                f"fills={r.get('fill_count')} as_of={r.get('as_of_date')} "
+                f"kind={r.get('run_kind') or 'portfolio'}"
             )
         return 0
 
@@ -596,7 +614,8 @@ def cmd_execution(args: argparse.Namespace) -> int:
         print(
             f"status=ok execution={run['execution_id']} portfolio={run.get('portfolio_id')} "
             f"run_status={run.get('status')} orders={run.get('order_count')} "
-            f"fills={run.get('fill_count')} adapter={run.get('adapter')}"
+            f"fills={run.get('fill_count')} adapter={run.get('adapter')} "
+            f"kind={run.get('run_kind') or 'portfolio'}"
         )
         for o in svc.repo.list_orders(args.execution):
             if o.get("event_type") == "NEW":
@@ -612,35 +631,46 @@ def cmd_execution(args: argparse.Namespace) -> int:
             )
         return 0
 
-    if action != "run":
+    results: list = []
+    if action == "resume-pending":
+        if not args.as_of:
+            print("status=invalid message=resume-pending 需要 --as-of")
+            return 2
+        results = svc.resume_pending(
+            as_of=args.as_of,
+            account_id=args.account or "paper_default",
+            cost_version=args.cost_version,
+            strategy_version=getattr(args, "strategy_version", None),
+            job_id=args.job_id,
+        )
+    elif action == "run":
+        if args.approved:
+            results = svc.run_approved(
+                as_of=args.as_of,
+                account_id=args.account,
+                cost_version=args.cost_version,
+                force=bool(args.force),
+                job_id=args.job_id,
+            )
+        elif args.portfolio:
+            results = [
+                svc.run(
+                    ExecutionRequest(
+                        portfolio_id=args.portfolio,
+                        cost_version=args.cost_version,
+                        force=bool(args.force),
+                        job_id=args.job_id,
+                    )
+                )
+            ]
+        else:
+            print("status=invalid message=需要 --portfolio 或 --approved")
+            return 2
+    else:
         print(f"status=invalid message=unknown action {action}")
         return 2
 
-    results = []
-    if args.approved:
-        results = svc.run_approved(
-            as_of=args.as_of,
-            account_id=args.account,
-            cost_version=args.cost_version,
-            force=bool(args.force),
-            job_id=args.job_id,
-        )
-    elif args.portfolio:
-        results = [
-            svc.run(
-                ExecutionRequest(
-                    portfolio_id=args.portfolio,
-                    cost_version=args.cost_version,
-                    force=bool(args.force),
-                    job_id=args.job_id,
-                )
-            )
-        ]
-    else:
-        print("status=invalid message=需要 --portfolio 或 --approved")
-        return 2
-
-    # C2：每个 committed execution 立即过账，避免同日多组合共享未过账快照
+    # C2：每个 committed execution 立即过账（无 fill 则跳过）
     from ledger.models import PostRequest
     from ledger.service import LedgerService
 
@@ -654,10 +684,18 @@ def cmd_execution(args: argparse.Namespace) -> int:
         )
         if result.message:
             print(f"message={result.message}")
+        if result.meta.get("pending_residual_count") is not None:
+            print(f"pending_residuals={result.meta.get('pending_residual_count')}")
+        if result.meta.get("pending_still_open") is not None:
+            print(f"pending_still_open={result.meta.get('pending_still_open')}")
         if result.status not in ("committed", "skipped"):
             exit_code = 2
             continue
-        if result.status == "committed" and result.execution_id:
+        if (
+            result.status == "committed"
+            and result.execution_id
+            and result.fill_count > 0
+        ):
             post = ledger.post(
                 PostRequest(
                     execution_id=result.execution_id,
@@ -673,6 +711,8 @@ def cmd_execution(args: argparse.Namespace) -> int:
                 print(f"post_message={post.message}")
             if post.status not in ("committed", "skipped"):
                 exit_code = 2
+        elif result.status == "committed" and result.fill_count == 0:
+            print("post_status=skipped message=no_fills")
     return exit_code
 
 
@@ -2796,6 +2836,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_ex_show = ex_sub.add_parser("show", help="执行详情：订单与成交")
     p_ex_show.add_argument("--execution", required=True)
     p_ex_show.set_defaults(func=cmd_execution)
+
+    p_ex_res = ex_sub.add_parser(
+        "resume-pending", help="续撮 open 残差（非调仓日也会跑）"
+    )
+    p_ex_res.add_argument("--as-of", required=True)
+    p_ex_res.add_argument("--account", default="paper_default")
+    p_ex_res.add_argument("--strategy-version", default=None)
+    p_ex_res.add_argument("--cost-version", default="v1_ashare_default")
+    p_ex_res.add_argument("--job-id", default=None)
+    p_ex_res.set_defaults(func=cmd_execution)
+
+    p_ex_lp = ex_sub.add_parser("list-pending", help="列出 execution_pending")
+    p_ex_lp.add_argument("--account", default=None)
+    p_ex_lp.add_argument(
+        "--status",
+        default="open",
+        help="open|filled|superseded|cancelled|all",
+    )
+    p_ex_lp.add_argument("--limit", type=int, default=50)
+    p_ex_lp.set_defaults(func=cmd_execution)
 
     p_ld = sub.add_parser("ledger", help="成交过账 / 余额 / T+1 可卖")
     ld_sub = p_ld.add_subparsers(dest="ledger_action", required=True)

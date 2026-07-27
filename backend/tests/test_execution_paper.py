@@ -164,3 +164,73 @@ def test_sell_before_buy_frees_cash():
     assert by["SELL1"]["status"] == "FILLED"
     assert by["BUY1"]["status"] == "FILLED"
     assert len(fills) == 2
+
+
+def test_compute_residuals_reject_and_clamp():
+    from execution.paper import compute_residuals
+
+    intents = [
+        {
+            "symbol": "A",
+            "side": "BUY",
+            "qty": 500,
+            "reject": False,
+            "mid_price": 10.0,
+        },
+        {
+            "symbol": "B",
+            "side": "SELL",
+            "qty": 200,
+            "reject": True,
+            "reason": "cannot_sell",
+            "mid_price": 10.0,
+        },
+    ]
+    orders = [
+        {
+            "symbol": "A",
+            "side": "BUY",
+            "qty": 200,
+            "status": "FILLED",
+            "reason": "clamped_cash",
+        },
+        {
+            "symbol": "B",
+            "side": "SELL",
+            "qty": 200,
+            "status": "REJECTED",
+            "reason": "cannot_sell",
+        },
+    ]
+    fills = [{"symbol": "A", "side": "BUY", "qty": 200}]
+    res = compute_residuals(
+        intents=intents, orders=orders, fills=fills, lot_size=100
+    )
+    by = {(r["symbol"], r["side"]): r for r in res}
+    assert by[("A", "BUY")]["qty_remaining"] == 300
+    assert by[("B", "SELL")]["qty_remaining"] == 200
+    assert by[("B", "SELL")]["last_reason"] == "cannot_sell"
+
+
+def test_build_pending_intents_respects_can_sell():
+    from execution.paper import build_pending_intents
+
+    pendings = [
+        {
+            "symbol": "X",
+            "side": "SELL",
+            "qty_remaining": 100,
+        }
+    ]
+    bars = {"X": {"close": 10.0, "can_buy": 1, "can_sell": 0}}
+    intents = build_pending_intents(
+        pendings=pendings, bars=bars, sellable_shares={"X": 100}
+    )
+    assert len(intents) == 1
+    assert intents[0]["reject"] and intents[0]["reason"] == "cannot_sell"
+
+    bars2 = {"X": {"close": 10.0, "can_buy": 1, "can_sell": 1}}
+    intents2 = build_pending_intents(
+        pendings=pendings, bars=bars2, sellable_shares={"X": 100}
+    )
+    assert not intents2[0]["reject"]

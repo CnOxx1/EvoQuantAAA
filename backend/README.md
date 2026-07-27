@@ -30,7 +30,7 @@
 | backtest | `backtest/` | A 股约束回测与报告 |
 | portfolio_construct | `portfolio_construct/` | 组合构建 → 目标持仓草稿 |
 | risk_engine | `risk_engine/` | 硬风控、Kill Switch；可否决执行 |
-| execution | `execution/` | OMS：委托/成交事件 |
+| execution | `execution/` | OMS：纸面委托/成交；残差 pending 续撮 |
 | ledger | `ledger/` | 资金持仓账本过账（T+1） |
 | ops_monitor | `ops_monitor/` | 监控、对账、告警、受控重跑 |
 

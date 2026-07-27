@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–16 已完成**（迁移 `001`–`032`）。纸面生产全链路可用；晋升含质量门。  
-**下一优先**：未成交残差 pending / 行业·ADV 风控 / 冲击成本 / console 写操作（见阶段 16 备注）。  
+**当前进度**：阶段 **1–17 已完成**（迁移 `001`–`033`）。纸面生产全链路可用；晋升含质量门；未成交残差可续撮。  
+**下一优先**：行业·ADV 风控 / 冲击成本 / console 写操作（见阶段 17 备注）。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `032`（promotion_gates），**新迁移从 `033` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `033`（execution_pending），**新迁移从 `034` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -66,9 +66,12 @@
 | 量化正确性 | LIVE 因子日刷 / 现金约束 / 资本配额 / 未复权成交价（迁移 `030`） |
 | 策略 sleeve | 同账户持仓按 strategy_version 隔离；执行后即过账；非调仓 hold；回测 lot T+1（迁移 `031`） |
 | 晋升质量门 | IC / 回撤 / 样本窗；`promotion_gate_*`（迁移 `032`） |
+| 未成交残差 | `execution_pending` 下日续撮（迁移 `033`） |
 | E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
 
-> **阶段 16（2026-07-27）**：晋升质量门——BACKTESTED/PAPER/LIVE 读 backtest +（LIVE）research IC；拒绝则落 `promotion_gate_result`；`--skip-gates` 须 reason。下一优先：残差 pending / 行业·ADV 风控 / 冲击成本。
+> **阶段 17（2026-07-27）**：未成交残差 pending——意图−成交落 `execution_pending`；`resume-pending` 续撮；schedule 先续撮再跑 approved；新调仓 supersede 旧 open。下一优先：行业·ADV 风控 / 冲击成本。
+>
+> **阶段 16（2026-07-27）**：晋升质量门——BACKTESTED/PAPER/LIVE 读 backtest +（LIVE）research IC；拒绝则落 `promotion_gate_result`；`--skip-gates` 须 reason。
 >
 > **阶段 15（2026-07-27）**：策略 sleeve 持仓；execution 后立即 ledger post；非调仓日 portfolio hold；signal 失败短路；回测 FIFO lot + close 成交；force 有 posting 则禁止。
 >
@@ -406,6 +409,21 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：迁移 `032`；pytest 含门控用例；E2E 绿；相关 README / 任务书 / 根 changelog 同步。
 
+---
+
+## 阶段 17 · 未成交残差 pending（execution）
+
+### 任务 17.1 残差落库与下日续撮
+
+**要求**：
+1. 迁移 `033`：`execution_pending` / `execution_pending_event`；`execution_run.run_kind` + `strategy_version`；portfolio committed 唯一索引仅约束 `run_kind=portfolio`
+2. portfolio 执行后：意图−成交≥1 手写入 open pending；同 sleeve 旧 open 先 superseded
+3. `execution resume-pending --as-of`：按 sleeve 用当日 can_*/T+1/现金续撮；同日幂等；`run_kind=pending_resume`
+4. schedule：在 `execution_paper` 前插入 `execution_pending_resume`；signal failed 时仍续撮 + ledger
+5. CLI `list-pending`；无 fill 不强制 ledger post；pytest / selfcheck / 文档同步
+
+**验收**：迁移 `033`；残差单测绿；pytest 全绿；相关 MD / 根 changelog 同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -438,3 +456,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 14 | 14.1 quant correctness | 因子日刷 / 现金 / 配额 / close / 账户敞口 |
 | 15 | 15.1 sleeve + hold + lot T+1 | 策略持仓隔离 / 即过账 / 非调仓 hold / 回测对齐 |
 | 16 | 16.1 promotion gates | IC/DD/样本窗门槛；拒绝可审计 |
+| 17 | 17.1 execution pending | 残差落库 / 续撮 / schedule 接入 |

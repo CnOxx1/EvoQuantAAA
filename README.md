@@ -53,7 +53,7 @@
 
 ## 2. 当前完成度
 
-**状态（2026-07-27）**：阶段 **1–16** 已落地；迁移 **`001`–`032`**。纸面全链路可跑；晋升含质量门；**未接**真实柜台。
+**状态（2026-07-27）**：阶段 **1–17** 已落地；迁移 **`001`–`033`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；**未接**真实柜台。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
@@ -64,11 +64,11 @@
 | 回测引擎 | ✅ | EW_* / FACTOR_TOP_N；FIFO lot T+1；`close` 成交 |
 | 策略晋升 + 质量门 | ✅ | DRAFT→…→LIVE；IC/DD/样本窗（`032`） |
 | 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；非调仓 hold；Kill Switch；账户合并敞口 |
-| 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；现金约束；执行后可即时过账 |
-| 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；`ops_alert` |
+| 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；现金约束；执行后可即时过账；**残差 pending 续撮** |
+| 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
 | API + E2E + console | ✅ | `/v1`；`python main.py e2e`；只读台 |
 | 实盘柜台 | ❌ | 仅 paper adapter |
-| 残差 pending / 冲击成本 / 行业·ADV 风控 | ⏳ | 阶段 17+ |
+| 冲击成本 / 行业·ADV 风控 | ⏳ | 阶段 18+ |
 
 **开发机约束**：只做短窗冒烟（几天～约 1 个月、TOP100 或单票）。**禁止** ALL_LISTED（6000+）长窗 bulk、禁止本机长历史回填。
 
@@ -80,7 +80,7 @@
 EvoQuantAAA
 ├── README.md                      # 本文件（入口手册）
 ├── ARCHITECTURE_PRINCIPLES.md     # 强制架构与合入清单
-├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 16）
+├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 17）
 ├── docker-compose.yml
 ├── backend/                       # 业务实现 + 统一 CLI
 │   ├── main.py                    # python main.py …
@@ -93,7 +93,7 @@ EvoQuantAAA
 │   ├── orchestrator/ ops_monitor/ api_gateway/
 │   ├── e2e/ tests/
 ├── database/
-│   ├── migrations/                # 001–032（新文件从 033 起）
+│   ├── migrations/                # 001–033（新文件从 034 起）
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
@@ -123,7 +123,7 @@ EvoQuantAAA
   → signal_prod          signal_prod_weight（仅 PAPER/LIVE）
   → portfolio_construct  portfolio_target（draft；非调仓日 hold）
   → risk_engine          risk_decision / kill_switch
-  → execution            order_event / fill_event（paper；sleeve 差额）
+  → execution            order/fill + execution_pending（残差续撮）
   → ledger               ledger_posting + lot + sleeve_position
   → api_gateway / ops_monitor
 ```
@@ -138,11 +138,14 @@ daily(CORE±ALPHA)
   → ALPHA 增量（失败可 degraded，不挡 CORE）
   → factor_refresh          # LIVE 策略因子日刷；失败则跳过交易链
   → signal_live
-  → portfolio → risk → execution(+ CLI 即时 ledger post) → ledger 兜底
+  → portfolio → risk
+  → execution resume-pending   # 先续撮历史残差（hold 日也跑）
+  → execution approved(+ CLI 即时 post)
+  → ledger 兜底
 ```
 
-- `security_master` 失败：跳过后续交易链  
-- `signal_live` failed：短路后续交易步  
+- `security_master` / `factor_refresh` 失败：跳过交易链  
+- `signal_live` failed：跳过 portfolio/risk/execution_paper，**仍跑 pending 续撮 + ledger**  
 - 非开市日：`schedule --once` 整体可 `skipped`  
 - 告警：`ops_alert`（可选 webhook）
 
@@ -165,7 +168,7 @@ daily(CORE±ALPHA)
 | 信号 | signal_prod | `backend/signal_prod/` | 生产权重（防未来函数） | [link](./backend/signal_prod/README.md) |
 | 组合 | portfolio_construct | `backend/portfolio_construct/` | 目标持仓草稿；资本配额 | [link](./backend/portfolio_construct/README.md) |
 | 风控 | risk_engine | `backend/risk_engine/` | 硬限额、Kill、账户合并敞口 | [link](./backend/risk_engine/README.md) |
-| 执行 | execution | `backend/execution/` | 纸面 OMS；sleeve 差额；现金投影 | [link](./backend/execution/README.md) |
+| 执行 | execution | `backend/execution/` | 纸面 OMS；sleeve 差额；现金；**pending 续撮** | [link](./backend/execution/README.md) |
 | 账本 | ledger | `backend/ledger/` | 过账、T+1 lot、sleeve | [link](./backend/ledger/README.md) |
 | 编排 | orchestrator | `backend/orchestrator/` | schedule / daily | [link](./backend/orchestrator/README.md) |
 | 运维 | ops_monitor | `backend/ops_monitor/` | 告警、coverage | [link](./backend/ops_monitor/README.md) |
@@ -230,7 +233,7 @@ research 计算/评估
 | --- | --- |
 | 引擎 | **仅 PostgreSQL**（默认 pgembed → `data/pgdata`；或 `ASHARE_DATABASE_URL`） |
 | 禁止 | SQLite 作为生产/开发主路径 |
-| 迁移 | `python main.py migrate`；已发布脚本不改写；新文件从 **`033`** 起 |
+| 迁移 | `python main.py migrate`；已发布脚本不改写；新文件从 **`034`** 起 |
 | 批次/运行 | `ingest_batch`、`process_batch`、`dq_gate`、`research_run`、`backtest_run`、`signal_batch`、`execution_run`、`ledger_posting` |
 | 费用 | 统一 `cost_params`（默认 `v1_ashare_default`）；回测与执行/账本同口径 |
 | 账本 | 现金账户共享；持仓 sleeve；lot 带 `strategy_version` |
@@ -319,7 +322,9 @@ cd frontend/console && python -m http.server 8081
 | 生产信号 | `python main.py signal run --live --as-of YYYY-MM-DD` |
 | 组合草稿 | `python main.py portfolio build --version sv_… --as-of … --account paper_default` |
 | 风控审核 | `python main.py risk review --portfolio pf_…` |
-| 纸面执行 | `python main.py execution run --portfolio pf_…`（CLI 内会对 committed 即时 post） |
+| 纸面执行 | `python main.py execution run --portfolio pf_…`（CLI 内对有 fill 的 committed 即时 post） |
+| 残差续撮 | `python main.py execution resume-pending --as-of YYYY-MM-DD` |
+| 残差列表 | `python main.py execution list-pending --account paper_default` |
 | 账本 | `python main.py ledger post --execution ex_…` / `ledger show --account …` |
 | Kill | `python main.py risk kill --on/--off` |
 | 网关 | `python main.py gateway --port 8080` |
@@ -333,7 +338,7 @@ cd frontend/console && python -m http.server 8081
 3. 跨模块经库交接，只传 ID。  
 4. 调度只经 `orchestrator`；对外只经 `api_gateway`。  
 5. 合入前：本文件 changelog **顶部**追加；更新相关模块 README；勾选 [架构原则 §6](./ARCHITECTURE_PRINCIPLES.md#6-合入前检查清单)。  
-6. 新表 = 新迁移 `033+`；不得改写已发布迁移。
+6. 新表 = 新迁移 `034+`；不得改写已发布迁移。
 
 ---
 
@@ -351,13 +356,12 @@ cd frontend/console && python -m http.server 8081
 
 ## 14. 下一优先
 
-阶段 **17+**（详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
+阶段 **18+**（详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. 未成交残差 → pending，下日续撮（`execution`）  
-2. 行业 / ADV / 换手等事前风控（`risk_engine`）  
-3. 冲击成本、T+1 open 等成交假设（`backtest` + `execution`）  
-4. console 写操作（经 `api_gateway`）  
-5. 实盘柜台适配器（更后）
+1. 行业 / ADV / 换手等事前风控（`risk_engine`）  
+2. 冲击成本、T+1 open 等成交假设（`backtest` + `execution`）  
+3. console 写操作（经 `api_gateway`）  
+4. 实盘柜台适配器（更后）
 
 ---
 
@@ -378,8 +382,20 @@ cd frontend/console && python -m http.server 8081
 | 14 | `030` | 量化正确性（配额、can_sell 等） |
 | 15 | `031` | 策略 sleeve |
 | 16 | `032` | 晋升质量门 |
+| 17 | `033` | 未成交残差 pending |
 
 ---
+
+### 2026-07-27 · 阶段 17：未成交残差 pending
+- **动机**：涨跌停/停牌/现金不足等导致当日未对齐目标时，残差被丢弃且 hold 日无新组合可执行。
+- **迁移**：`033_execution_pending.sql` → `execution_pending` / `execution_pending_event`；`execution_run.run_kind` + `strategy_version`；portfolio committed 唯一仅约束 `run_kind=portfolio`。
+- **模块**：`execution`（残差计算/落库/`resume_pending`）、`orchestrator`（先续撮再 approved）、`main.py` CLI。
+- **行为**：
+  - portfolio 执行：意图−成交≥1 手 → open pending；同 sleeve 旧 open 先 superseded。
+  - `resume-pending`：按 sleeve 当日 can_*/T+1/现金续撮；同日幂等；`run_kind=pending_resume`。
+  - schedule：`execution_pending_resume` 在 `execution_paper` 前；signal failed 时仍续撮 + ledger。
+  - CLI：无 fill 不强制 ledger post。
+- **验收**：migrate `033`；残差 pytest；全量 pytest；文档同步。
 
 ### 2026-07-27 · 根 README 扩写为入口手册
 - **动机**：根文档过简，无法作为 Agent/新人入口。
@@ -606,7 +622,7 @@ cd frontend/console && python -m http.server 8081
 | 文档 | 内容 |
 | --- | --- |
 | [ARCHITECTURE_PRINCIPLES.md](./ARCHITECTURE_PRINCIPLES.md) | 强制架构、不变量、合入清单 |
-| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 16） |
+| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 17） |
 | [backend/README.md](./backend/README.md) | 后端模块总览与 CLI |
 | [database/README.md](./database/README.md) | 迁移与契约入口 |
 | [database/schema/README.md](./database/schema/README.md) | 表产消登记（权威） |

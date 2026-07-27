@@ -106,9 +106,11 @@
 | risk_decision | oltp | risk_engine | execution | decision_id | approved/rejected；同步 portfolio 状态 |
 | kill_switch | oltp | risk_engine | execution | scope_key | GLOBAL 或 account_id；下单前必读 |
 | risk_limits | ref_data | migrations 种子 | risk_engine | version | 单票/只数/敞口限额 |
-| execution_run | oltp | execution | ledger, ops_monitor | execution_id | 纸面 OMS；同 portfolio 至多一 committed / 一 running |
+| execution_run | oltp | execution | ledger, ops_monitor | execution_id | 纸面 OMS；`run_kind=portfolio\|pending_resume`；portfolio 类同 portfolio 至多一 committed / 一 running |
 | order_event | oltp | execution | ledger, ops_monitor | event_id / order_id | 委托事件追加 |
 | fill_event | oltp | execution | ledger, ops_monitor | fill_id | 成交；含佣金/印花税/滑点 |
+| execution_pending | oltp | execution | orchestrator, ops_monitor | pending_id | 未成交残差；open 按 (account, strategy_version, symbol, side) 唯一 |
+| execution_pending_event | oltp | execution | ops_monitor | event_id | 续撮审计 |
 | ledger_account | oltp | ledger | portfolio_construct, risk_engine | account_id | 账户；种子 paper_default |
 | ledger_posting | oltp | ledger | ops_monitor | posting_id | 按 execution 幂等；分录与 committed 同事务 |
 | ledger_entry | oltp | ledger | ops_monitor | entry_id | 分录 |

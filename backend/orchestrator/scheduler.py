@@ -153,6 +153,7 @@ def run_once(
         "signal_live",
         "portfolio_live",
         "risk_review",
+        "execution_pending_resume",
         "execution_paper",
         "ledger_post",
     )
@@ -206,7 +207,6 @@ def run_once(
                     "portfolio_live",
                     "risk_review",
                     "execution_paper",
-                    "ledger_post",
                 ):
                     result.steps.append(
                         StepResult(
@@ -216,6 +216,29 @@ def run_once(
                         )
                     )
                 print("trading steps skipped due to signal_live failure")
+                ex_pend = Namespace(
+                    execution_action="resume-pending",
+                    as_of=day,
+                    account="paper_default",
+                    strategy_version=None,
+                    cost_version="v1_ashare_default",
+                    job_id=jid,
+                )
+                _safe_call(
+                    lambda: int(main.cmd_execution(ex_pend)),
+                    "execution_pending_resume",
+                    result,
+                )
+                ld_ns = Namespace(
+                    ledger_action="post",
+                    execution=None,
+                    unposted=True,
+                    account="paper_default",
+                    force=False,
+                    limit=50,
+                    job_id=jid,
+                )
+                _safe_call(lambda: int(main.cmd_ledger(ld_ns)), "ledger_post", result)
             else:
                 # --- 6. 组合草稿（仅 LIVE；非调仓日 hold skipped）---
                 pf_ns = Namespace(
@@ -250,7 +273,22 @@ def run_once(
                 )
                 _safe_call(lambda: int(main.cmd_risk(rk_ns)), "risk_review", result)
 
-                # --- 8. 纸面执行 approved（CLI 内每单立即过账）---
+                # --- 8a. 先续撮历史残差 ---
+                ex_pend = Namespace(
+                    execution_action="resume-pending",
+                    as_of=day,
+                    account="paper_default",
+                    strategy_version=None,
+                    cost_version="v1_ashare_default",
+                    job_id=jid,
+                )
+                _safe_call(
+                    lambda: int(main.cmd_execution(ex_pend)),
+                    "execution_pending_resume",
+                    result,
+                )
+
+                # --- 8b. 纸面执行 approved ---
                 ex_ns = Namespace(
                     execution_action="run",
                     portfolio=None,

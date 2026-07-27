@@ -108,6 +108,32 @@ def _run_mock() -> None:
     )
     assert all(o["status"] == "FILLED" for o in orders_c)
     assert len(fills_c) == 2
+
+    from execution.paper import compute_residuals
+
+    res = compute_residuals(
+        intents=[
+            {
+                "symbol": "Z",
+                "side": "BUY",
+                "qty": 300,
+                "reject": True,
+                "reason": "cannot_buy",
+            }
+        ],
+        orders=[
+            {
+                "symbol": "Z",
+                "side": "BUY",
+                "qty": 300,
+                "status": "REJECTED",
+                "reason": "cannot_buy",
+            }
+        ],
+        fills=[],
+        lot_size=100,
+    )
+    assert len(res) == 1 and res[0]["qty_remaining"] == 300
     print("mock_cases=ok")
 
 

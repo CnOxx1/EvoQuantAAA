@@ -80,9 +80,25 @@ class ExecutionRepository:
                 """
                 SELECT * FROM execution_run
                 WHERE portfolio_id=? AND status='committed'
+                  AND COALESCE(run_kind, 'portfolio')='portfolio'
                 LIMIT 1
                 """,
                 (portfolio_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def find_pending_resume_committed(
+        self, *, account_id: str, as_of: str, strategy_version: str
+    ) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM execution_run
+                WHERE account_id=? AND as_of_date=? AND strategy_version=?
+                  AND status='committed' AND run_kind='pending_resume'
+                LIMIT 1
+                """,
+                (account_id, as_of[:10], strategy_version),
             ).fetchone()
         return dict(row) if row else None
 
@@ -369,8 +385,16 @@ class ExecutionRepository:
         finished_at: str,
         meta: dict[str, Any],
         mark_portfolio_executed: bool = True,
+        pending_upserts: list[dict[str, Any]] | None = None,
+        pending_closes: list[dict[str, Any]] | None = None,
+        pending_events: list[dict[str, Any]] | None = None,
+        supersede_open_pending: dict[str, str] | None = None,
     ) -> None:
-        """单事务：INSERT run(running) → orders/fills → run=committed → portfolio=executed。"""
+        """
+        单事务：INSERT run(running) → orders/fills → pending 维护 → committed
+        → 可选 portfolio=executed。
+        supersede_open_pending: {account_id, strategy_version} 先关闭该 sleeve 全部 open。
+        """
         order_sql = """
             INSERT INTO order_event (
                 event_id, order_id, execution_id, portfolio_id, account_id,
@@ -384,14 +408,17 @@ class ExecutionRepository:
                 slippage_cost, trade_date, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
+        run_kind = str(run_row.get("run_kind") or "portfolio")
+        strategy_version = run_row.get("strategy_version")
         with get_conn() as conn:
             conn.execute(
                 """
                 INSERT INTO execution_run (
                     execution_id, portfolio_id, account_id, adapter, status,
                     as_of_date, decision_id, cost_version, order_count, fill_count,
-                    job_id, meta_json, error_message, created_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    job_id, meta_json, error_message, created_at, finished_at,
+                    run_kind, strategy_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_row["execution_id"],
@@ -409,6 +436,8 @@ class ExecutionRepository:
                     None,
                     run_row["created_at"],
                     None,
+                    run_kind,
+                    strategy_version,
                 ),
             )
             if order_events:
@@ -457,6 +486,124 @@ class ExecutionRepository:
                         for r in fill_events
                     ],
                 )
+
+            if supersede_open_pending:
+                conn.execute(
+                    """
+                    UPDATE execution_pending
+                    SET status='superseded', updated_at=?,
+                        source_execution_id=COALESCE(?, source_execution_id)
+                    WHERE account_id=? AND strategy_version=? AND status='open'
+                    """,
+                    (
+                        finished_at,
+                        run_row["execution_id"],
+                        supersede_open_pending["account_id"],
+                        supersede_open_pending["strategy_version"],
+                    ),
+                )
+
+            for p in pending_closes or []:
+                conn.execute(
+                    """
+                    UPDATE execution_pending
+                    SET status=?, qty_remaining=?, last_reason=?,
+                        source_execution_id=?, updated_at=?
+                    WHERE pending_id=?
+                    """,
+                    (
+                        p["status"],
+                        float(p["qty_remaining"]),
+                        p.get("last_reason"),
+                        p.get("source_execution_id"),
+                        finished_at,
+                        p["pending_id"],
+                    ),
+                )
+
+            for p in pending_upserts or []:
+                existing = conn.execute(
+                    """
+                    SELECT pending_id FROM execution_pending
+                    WHERE account_id=? AND strategy_version=? AND symbol=? AND side=?
+                      AND status='open'
+                    LIMIT 1
+                    """,
+                    (
+                        p["account_id"],
+                        p["strategy_version"],
+                        p["symbol"],
+                        p["side"],
+                    ),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE execution_pending
+                        SET qty_remaining=?, qty_origin=?, last_reason=?,
+                            source_portfolio_id=?, source_execution_id=?,
+                            updated_at=?, meta_json=?
+                        WHERE pending_id=?
+                        """,
+                        (
+                            float(p["qty_remaining"]),
+                            float(p["qty_origin"]),
+                            p.get("last_reason"),
+                            p["source_portfolio_id"],
+                            p.get("source_execution_id"),
+                            finished_at,
+                            json.dumps(p.get("meta") or {}, ensure_ascii=False),
+                            str(existing["pending_id"]),
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO execution_pending (
+                            pending_id, account_id, strategy_version, symbol, side,
+                            qty_remaining, qty_origin, source_portfolio_id,
+                            source_execution_id, origin_as_of, last_reason, status,
+                            meta_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+                        """,
+                        (
+                            p["pending_id"],
+                            p["account_id"],
+                            p["strategy_version"],
+                            p["symbol"],
+                            p["side"],
+                            float(p["qty_remaining"]),
+                            float(p["qty_origin"]),
+                            p["source_portfolio_id"],
+                            p.get("source_execution_id"),
+                            p["origin_as_of"],
+                            p.get("last_reason"),
+                            json.dumps(p.get("meta") or {}, ensure_ascii=False),
+                            finished_at,
+                            finished_at,
+                        ),
+                    )
+
+            for ev in pending_events or []:
+                conn.execute(
+                    """
+                    INSERT INTO execution_pending_event (
+                        event_id, pending_id, execution_id, trade_date,
+                        qty_before, qty_after, reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ev["event_id"],
+                        ev["pending_id"],
+                        ev.get("execution_id"),
+                        ev.get("trade_date"),
+                        float(ev["qty_before"]),
+                        float(ev["qty_after"]),
+                        ev.get("reason"),
+                        finished_at,
+                    ),
+                )
+
             conn.execute(
                 """
                 UPDATE execution_run
@@ -478,6 +625,44 @@ class ExecutionRepository:
                     (run_row["portfolio_id"],),
                 )
 
+    def list_open_pending(
+        self,
+        *,
+        account_id: str,
+        strategy_version: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT * FROM execution_pending
+            WHERE account_id=? AND status='open'
+        """
+        params: list[Any] = [account_id]
+        if strategy_version is not None:
+            sql += " AND strategy_version=?"
+            params.append(strategy_version)
+        sql += " ORDER BY strategy_version, symbol, side"
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_pending(
+        self,
+        *,
+        account_id: str | None = None,
+        status: str | None = "open",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM execution_pending WHERE 1=1"
+        params: list[Any] = []
+        if account_id:
+            sql += " AND account_id=?"
+            params.append(account_id)
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 500)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
     def supersede_committed(self, portfolio_id: str, *, finished_at: str) -> None:
         with get_conn() as conn:
             conn.execute(
@@ -485,6 +670,7 @@ class ExecutionRepository:
                 UPDATE execution_run
                 SET status='superseded', finished_at=COALESCE(finished_at, ?)
                 WHERE portfolio_id=? AND status='committed'
+                  AND COALESCE(run_kind, 'portfolio')='portfolio'
                 """,
                 (finished_at, portfolio_id),
             )
