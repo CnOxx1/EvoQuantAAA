@@ -363,42 +363,241 @@ cd frontend/console && python -m http.server 8081
 
 ## 15. 开发更新记录
 
-> 新→旧；里程碑在**顶部**追加。
+> **约定**：新→旧；有可合并里程碑时在**顶部**追加。每条尽量写清：动机、迁移、模块、行为、验收。  
+> 任务原文与验收标准以 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) 为准；表级产消以 [database/schema/README.md](./database/schema/README.md) 为准。
+
+### 阶段 → 迁移速查
+
+| 阶段 | 迁移 | 主题 |
+| --- | --- | --- |
+| 底座 / ingest | `001`–`016` | CORE/ALPHA raw、加工、DQ、Universe、backtest、新闻增强等 |
+| 2–3 研究正确性 | `017`–`018` | 因子表、基本面 PIT |
+| 4 编排运维 | `019`–`022` | 告警、tech 日线/分类、分钟 K |
+| 5–12 生产链路 | `023`–`029` | 策略信号→组合→风控→执行→账本→API→硬化 |
+| 13 补丁 | （行为向，无独立大表） | 原子执行 / SM 门禁 / 告警分级 |
+| 14 | `030` | 量化正确性（配额、can_sell 等） |
+| 15 | `031` | 策略 sleeve |
+| 16 | `032` | 晋升质量门 |
+
+---
 
 ### 2026-07-27 · 根 README 扩写为入口手册
-- 补齐完成度矩阵、模块地图、日更、不变量、晋升门、环境变量、命令速查与数据债
+- **动机**：根文档过简，无法作为 Agent/新人入口。
+- **改动**：完成度矩阵、模块地图（链到各 README）、日更序列、不变量摘要、研究→生产与质量门、环境变量、分步快速开始、命令速查、数据债与下一优先、文档索引。
+- **验收**：与阶段 16 / 迁移 `032` 描述一致。
+
+---
 
 ### 2026-07-27 · 阶段 16：晋升质量门
-- `promotion_gate_params` / `promotion_gate_result`（迁移 `032`）
-- BACKTESTED/PAPER/LIVE 评估回撤/收益/样本窗；LIVE 强制 research IC
-- 拒绝可审计；`--skip-gates` 须 reason；API/CLI/e2e/pytest 同步
+- **动机**：纸面链路已通，但策略进 LIVE 缺少硬门槛（「能晋升」≠「该晋升」）。
+- **迁移**：`032_promotion_gates.sql` → `promotion_gate_params`（版本化阈值，默认 `v1_default`）、`promotion_gate_result`（每次评估审计，含 skip）。
+- **模块**：`strategy_registry`（`gates.py` 纯评估 + `service.promote` 拦截）；`api_gateway`（`skip_gates` / `gate_version`）；`main.py strategy promote|show`；`e2e` 种子带 IC 报告与 ≥20 日回测窗，并重置账户持仓以保证 fill。
+- **行为**：
+  - 晋升至 BACKTESTED / PAPER / LIVE 前读 `backtest_run`：`max_drawdown`、`total_return`、日历窗、`trade_count`。
+  - LIVE 额外强制 committed `research_run.meta_json.report`（`ic_mean` / `ic_days` 等）。
+  - 未通过 → 拒绝晋升，仍落 `promotion_gate_result(passed=0)`。
+  - `--skip-gates` 必须带 `--reason`（`skipped=1`）；`ASHARE_PROMOTION_GATE_VERSION` 可切阈值版本。
+  - `RETIRED` / `LIVE→PAPER` 不评估。
+- **验收**：migrate `032`；pytest 门控用例；selfcheck；e2e exit 0；相关 README / 任务书 / 本 changelog 同步。
+- **提交**：`b0d2ade`。
 
-### 2026-07-27 · 根文档对齐阶段 15
-- 完成度、主链路、快速开始与代码对齐（迁移 `031`、纸面全链路）
+---
+
+### 2026-07-27 · 根文档对齐阶段 14–15
+- **动机**：阶段 14–15 合入后根 README 仍写「生产路径待建 / 迁移至 029」等过时表述。
+- **改动**：对齐迁移 `031`、纸面全链路、sleeve、短窗快速开始；精简旧 changelog 条目（本轮起再展开）。
+- **提交**：`da896d9`。
+
+---
 
 ### 2026-07-27 · 阶段 15：策略 sleeve 与回测对齐
-- `ledger_sleeve_position`；execution 差额仅对本策略；执行后即时 post
-- 非调仓 hold；signal failed 短路；回测 FIFO lot + `close`；迁移 `031`
+- **动机**：同账户多策略若共用账户级持仓，差额成交会互相踩仓；回测 lot T+1 与 live 口径不一致。
+- **迁移**：`031_strategy_sleeve.sql` → `ledger_sleeve_position`；`ledger_lot.strategy_version` / `ledger_posting.strategy_version`；存量 POSITION 回填到 `strategy_version=''`。
+- **模块**：`ledger`、`execution`、`portfolio_construct`、`orchestrator`、`backtest`、CLI（execution 后即时 post）。
+- **行为**：
+  - 持仓按 `strategy_version` sleeve 隔离；现金仍账户共享。
+  - execution 差额只相对本策略 sleeve；`execution run` 每个 committed 后立即 `ledger post`。
+  - 已有 posting 的 portfolio 禁止 `--force` 重跑。
+  - live portfolio：`require_signal_as_of` — 非调仓日 hold（skipped）。
+  - schedule：`signal_live` failed 短路后续交易步。
+  - 回测：FIFO lot T+1（加仓不合并最早 `buy_date`）；成交价优先未复权 `close`。
+- **数据债**：旧 `''` sleeve 与命名 sleeve 并存时，账户合计 NAV 可能偏高（见 [ledger README](./backend/ledger/README.md)）。
+- **验收**：迁移 `031`；pytest 全绿；e2e 含 sleeve 过账。
+- **提交**：含于 `226a7e7`（与阶段 14 同发）。
+
+---
 
 ### 2026-07-27 · 阶段 14：量化正确性 Critical
-- `factor_refresh`；现金投影；`strategy_capital_alloc`；`close` 成交；`can_sell`；账户合并敞口；`030`
+- **动机**：生产日更未刷 LIVE 因子、纸面可透支、多策略 NAV 未切分、成交价与复权混淆、风控未合并同账户敞口。
+- **迁移**：`030_quant_correctness.sql` → `portfolio_target_position.can_sell`；`strategy_capital_alloc`。
+- **模块**：`orchestrator`（`factor_refresh`）、`execution`（现金投影）、`portfolio_construct`（资本配额 / NAV）、`risk_engine`（账户合并敞口）、sizing 口径。
+- **行为**：
+  1. schedule 在 `signal_live` 前按 LIVE 策略刷新 `research_factor_value`；失败跳过交易链并 `degraded`。
+  2. 纸面成交：先卖后买投影现金；不足 → `insufficient_cash` / `clamped_cash`。
+  3. 同账户多策略经 `strategy_capital_alloc` 切分 NAV（缺省等权）。
+  4. sizing / 成交价优先未复权 `close`（缺再退 `adj_close`）。
+  5. 目标腿落库 `can_sell`；风控合并同账户同日敞口。
+- **验收**：迁移 `030`；pytest 含现金约束与账户合并敞口。
+- **提交**：含于 `226a7e7`。
 
-### 2026-07-27 · 阶段 13：编排与执行硬化
-- execution 原子提交；SM 失败跳过交易链；告警分级；API token；Kill 解除可重审
+---
 
-### 2026-07-27 · 阶段 12–5（摘要）
-- E2E + console；生产硬化 → gateway → ledger → execution → risk → portfolio → strategy/signal（`023`–`029`）
+### 2026-07-27 · 阶段 13：编排与执行硬化补丁
+- **动机**：执行非原子、SM 失败仍跑交易链、告警无分级、API 鉴权可选过松、Kill 解除后草稿无法重审。
+- **模块**：`execution`（`commit_execution_atomic`）、`orchestrator`、`ops_monitor`（`notify_round` severity）、`api_gateway`（`ASHARE_API_REQUIRE_TOKEN`）、`risk_engine`。
+- **行为**：
+  - order/fill 与 run 状态同事务提交；失败不留脏 running。
+  - `security_master` 失败 → 跳过 signal→ledger，本轮 `degraded`。
+  - failed / degraded 告警分级；可选强制 Bearer。
+  - Kill 关闭后可重审曾因 Kill 被否决的组合。
+- **验收**：pytest 全绿；README 与行为一致。
+- **提交**：含于 `a7e2f59` 链路后续硬化（与 5–12 同波交付说明见下）。
 
-### 2026-07-27 · 阶段 4 及数据增强（摘要）
-- schedule / ops_alert / coverage；tech 与分钟 K；ALPHA 增强 kind
+---
 
-### 2026-07-25 · 阶段 1–3
-- 回测撮合 + pytest/CI；研究 IC + FACTOR_TOP_N；PIT / 除权 DQ / 成分点时
+### 2026-07-27 · 阶段 12：E2E 回归 + 最小前端
+- **动机**：缺一键短窗回归与可视只读台，人工难验证全链路。
+- **模块**：`backend/e2e`（`python main.py e2e`）、`frontend/console`（静态页 + gateway CORS）。
+- **行为**：自备种子跑通 register→promote→signal→portfolio→risk→execution→ledger→API TestClient；断言组合/执行/过账幂等；console 只读拉 strategies / kill / ledger。
+- **约束**：不拉 ALL_LISTED；`require_dq=False` 仅回归。
+- **验收**：e2e exit 0；console 可访问 gateway。
+- **提交**：含于 `a7e2f59`。
 
-### 2026-07-24 及前期
-- PG 底座与 CORE/ALPHA ingest；加工 / DQ / Universe / EW_HOLD；首推 GitHub
+---
 
-更细条目见 git 历史与各模块 README。
+### 2026-07-27 · 阶段 11：生产链路硬化
+- **动机**：空仓全买叠加、组合/执行可重复插入、过账非原子、schedule 失败语义不清。
+- **迁移**：`029_prod_hardening.sql` — 组合按日活跃唯一；execution/ledger `running` 唯一等。
+- **行为**：
+  - execution 读 ledger 持仓做**差额** + T+1 可卖，避免重复全仓买入。
+  - portfolio 同日活跃幂等；默认账本 NAV；仅 committed 信号。
+  - ledger 分录与 posting committed 同事务。
+  - schedule 交易步骤失败 → `degraded`（非整轮静默成功）。
+  - ingest `timeutil` / 解析迁入 `shared` / `ingest_common`。
+- **验收**：pytest 全绿；重跑 schedule 不叠加空仓全买。
+- **提交**：含于 `a7e2f59`。
+
+---
+
+### 2026-07-27 · 阶段 10：对外网关（api_gateway）
+- **动机**：frontend / 外部调用不能直连库或各模块内部口。
+- **迁移**：`028_api_gateway.sql` → `api_audit_log`。
+- **行为**：FastAPI `/v1` 只读（strategies / portfolios / risk / executions / ledger / alerts）+ 写（promote / kill / review）；可选 `ASHARE_API_TOKEN`；写操作落审计；CLI `gateway`。
+- **验收**：`/health`、`/v1/strategies` 可通；写操作有审计行。
+- **提交**：含于 `a7e2f59`。
+
+---
+
+### 2026-07-27 · 阶段 9：账本过账（ledger）
+- **动机**：OMS 事件 ≠ 资金持仓真相；需独立过账与 T+1 可卖。
+- **迁移**：`027_ledger.sql` → `ledger_account` / `ledger_posting` / `ledger_entry` / `ledger_balance` / `ledger_lot`；种子 `paper_default`。
+- **行为**：消费 committed `fill_event`；BUY 扣现金建 lot；SELL 校验 T+1 FIFO；同 execution 幂等；CLI `ledger ensure|post|show|sellable|list`；schedule 在 execution 后 `post --unposted`（后由阶段 15 改为执行后即时 post + 兜底）。
+- **验收**：paper execution 可过账；同日卖出在投影单测中被拒。
+- **提交**：含于 `a7e2f59`。
+
+---
+
+### 2026-07-27 · 阶段 8：纸面执行（execution）
+- **动机**：风控放行后需要 OMS 事件层（尚未接真实柜台）。
+- **迁移**：`026_execution.sql` → `execution_run` / `order_event` / `fill_event`。
+- **行为**：仅 `approved` + 最新 risk approved + Kill off；paper 适配器即时成交；费用读 `cost_params`；成功后 portfolio→`executed`；CLI `execution run|list|show`；schedule 接在 risk 后。
+- **验收**：approved 可 committed；kill on / 非 approved → blocked。
+- **提交**：含于 `a7e2f59`。（后续阶段 11/14/15 将「空仓全买」演进为差额 / 现金 / sleeve。）
+
+---
+
+### 2026-07-27 · 阶段 7：风控关卡（risk_engine）
+- **动机**：执行前必须有硬否决与 Kill Switch。
+- **迁移**：`025_risk_engine.sql` → `risk_decision` / `kill_switch` / `risk_limits`（种子 `v1_default`）。
+- **行为**：硬规则（Kill、单票权重、只数、敞口、can_buy、整手）；通过 → portfolio `approved`，否则 `rejected`；CLI `risk review|kill|status|list|show`；schedule 审当日 draft。
+- **验收**：draft 可放行；Kill on 必否决。（阶段 14 起增加账户合并敞口。）
+- **提交**：含于 `a7e2f59`。
+
+---
+
+### 2026-07-27 · 阶段 6：组合草稿（portfolio_construct）
+- **动机**：生产权重需落地为整手目标持仓草稿，供风控/执行消费。
+- **迁移**：`024_portfolio_construct.sql` → `portfolio_target` / `portfolio_target_position`。
+- **行为**：仅 PAPER/LIVE；读 as_of 及之前最近调仓日信号；剔 `can_buy!=1`/缺价后重归一；按 `lot_size` 整手下取；`status=draft`；CLI `portfolio build|list|show`；schedule 在 signal 后跑 LIVE。
+- **验收**：对已有 LIVE 信号可出草稿。（后续：幂等、账本 NAV、非调仓 hold、资本配额、can_sell。）
+- **提交**：含于 `a7e2f59`。
+
+---
+
+### 2026-07-27 · 阶段 5：研究→生产隔离（strategy_registry + signal_prod）
+- **动机**：实验信号不得直接进执行；需版本状态机与生产权重表。
+- **迁移**：`023_strategy_signal.sql` → `strategy_version` / `strategy_transition` / `signal_batch` / `signal_prod_weight`。
+- **行为**：
+  - registry：`register|promote|retire|list|show`；DRAFT→BACKTESTED→PAPER→LIVE（可 RETIRED）；BACKTESTED 须 committed `backtest_run`；同 code 至多一 LIVE（CAS 晋升）。
+  - signal_prod：仅 PAPER/LIVE；FACTOR_TOP_N 用**前一交易日**因子（禁前视）；写权重批次；默认要求 DQ 区间 passed；schedule 日更 LIVE（非调仓日 skipped）。
+- **验收**：register→promote→`signal run` 落库；pytest 含前视防护。（阶段 16 起晋升加质量门。）
+- **提交**：含于 `a7e2f59`。
+
+---
+
+### 2026-07-27 · 阶段 4：编排、运维与数据层收尾
+- **动机**：无人值守日更、失败可观测、覆盖度可查；技术指标与分钟线支撑研究。
+- **迁移**：`019` `ops_alert`；`020`–`021` 日线 tech + category；`022` 分钟 K + 分钟 tech。
+- **行为**：
+  - `python main.py schedule --once/--at`：daily → SM → ALPHA →（其后阶段再接交易链）。
+  - `ops_alert` + 可选 webhook；`coverage` 覆盖度矩阵。
+  - 新闻去重 / 水位回看；`data_process --kind tech_indicator`；TECH_* 研究因子。
+- **相关前期数据增强（同波或紧前）**：估值/板块/解禁/股东（`013`）、新闻情绪官方/论坛/政策（`014`）、重大合同（`015`）、个股关系（`016`）。
+- **验收**：schedule 可跑一轮；告警可写库；tech/分钟链路可冒烟。
+- **提交**：`a76043e`（及前后 ingest 增强提交）。
+
+---
+
+### 2026-07-25 · 阶段 3：PIT 与数据正确性
+- **动机**：基本面/成分/涨跌停若点时错误，研究与掩码不可信。
+- **迁移**：`018_phase3_pit_correctness.sql` → `processed_fund_snapshot`（`valid_from`/`valid_to` 区间）。
+- **行为**：
+  - 基本面 PIT：按 `publish_date <= trade_date` 取最新报告期。
+  - 除权交叉校验 DQ 规则；成分历史按快照 as-of 回放。
+  - 涨跌停价格推导回退，补齐近年可买可卖掩码。
+  - ALPHA DQ 质量报告（不挡 CORE）。
+- **验收**：PIT/成分/掩码相关 pytest 或 selfcheck 通过。
+- **提交**：含于 `85ba0a7`。
+
+---
+
+### 2026-07-25 · 阶段 2：最小研究闭环（research_lab）
+- **动机**：有行情无因子/无评估/无因子策略回测，无法形成研究闭环。
+- **迁移**：`017_research_lab.sql` → `research_run` / `research_factor_value`。
+- **行为**：
+  - 基线因子落库：`MOM_20`、`VAL_PE_PCT`、`FLOW_NET_5`（后续加 TECH_*）。
+  - IC / ICIR / 胜率 / 分层与多空（写入 `research_run.meta_json.report`）。
+  - 回测新增 `FACTOR_TOP_N`：调仓日用前一日因子 top N 等权。
+- **验收**：数据→因子→IC→FACTOR_TOP_N 回测可短窗跑通。
+- **提交**：含于 `85ba0a7`。
+
+---
+
+### 2026-07-25 · 阶段 1：回测正确性 + 测试基建
+- **动机**：早期 EW 引擎未真正用 T+1/`can_sell`/印花税，回测不可信。
+- **迁移**：沿用 `010_backtest.sql`（`cost_params` / `backtest_run` / `nav` / `trade`）。
+- **行为**：
+  - 通用撮合 `run_target_weights`：先卖后买、T+1、整手、涨跌停掩码、印花税（仅卖）、滑点、现金不足缩量。
+  - `EW_HOLD` / `EW_REBALANCE` 基于新引擎；CLI `--rebalance-days`。
+  - `backend/tests/` pytest；CI + `.gitignore` 排除 `data/pgdata` 等。
+- **验收**：engine/compute/rules 单测绿；CI 绿。
+- **提交**：含于 `85ba0a7`。
+
+---
+
+### 2026-07-24 及前期 · 底座与 CORE/ALPHA 骨架
+- **动机**：建立 PG 契约、可插拔取数、加工/DQ/Universe、最小回测入口，并推送 GitHub。
+- **迁移**：`001`–`010`（公告、core_ref/market、fundamental、flow、news、process、DQ、security_master、backtest）；其后 `011`–`012` 市场排名与微观结构等。
+- **行为**：
+  - PostgreSQL（pgembed）+ `shared/db`；禁止 SQLite 主路径。
+  - CORE / ALPHA ingest（多 kind）；bulk UPSERT、日期分块、可恢复；`daily` 增量 runner。
+  - `data_process` 复权 / `ret_1d` / `can_buy`/`can_sell`；`data_quality` CORE gate；`security_master` Universe 快照。
+  - 初版 `EW_HOLD` 回测与模块 README 协作约定；根 README changelog 机制。
+- **代表提交**：`5842d35`（初版）、`d53095d`（文档与 changelog）、`318da6f` / `0e2c69c` / `b0e24a0`（universe 分块、ingest 硬化、新闻情绪等）。
+
+---
+
+合入新功能时：在本节**顶部**追加同结构条目（动机 / 迁移 / 模块 / 行为 / 验收），并更新上方「阶段 → 迁移速查」表。
 
 ---
 
