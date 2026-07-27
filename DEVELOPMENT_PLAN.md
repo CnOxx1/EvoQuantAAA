@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–15 已完成**（迁移 `001`–`031`）。纸面生产全链路可用。  
-**下一优先**：晋升质量门 / 残差 pending / 行业·ADV 风控 / 冲击成本 / console 写操作（见阶段 15 备注）。  
+**当前进度**：阶段 **1–16 已完成**（迁移 `001`–`032`）。纸面生产全链路可用；晋升含质量门。  
+**下一优先**：未成交残差 pending / 行业·ADV 风控 / 冲击成本 / console 写操作（见阶段 16 备注）。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `031`（strategy_sleeve），**新迁移从 `032` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `032`（promotion_gates），**新迁移从 `033` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -56,7 +56,7 @@
 | 分钟 K 15m/60m | `core_market` + `data_process` + `processed_tech_indicator_min` |
 | tech 派生研究因子 TECH_* | `backend/research_lab/`（经库读 tech 表） |
 | 日更 ALPHA含 stock_flow | `orchestrator/scheduler.py` / `cmd_daily --with-alpha` |
-| 策略注册 + 生产信号 | `strategy_registry` / `signal_prod`（迁移 `023`） |
+| 策略注册 + 生产信号 | `strategy_registry` / `signal_prod`（迁移 `023`；晋升门 `032`） |
 | 目标持仓草稿 | `portfolio_construct`（迁移 `024`） |
 | 风控放行/Kill Switch | `risk_engine`（迁移 `025`） |
 | 纸面 OMS 事件 | `execution`（迁移 `026`） |
@@ -65,9 +65,12 @@
 | 生产硬化 | 差额成交 / 按日幂等 / 账本原子过账（迁移 `029`） |
 | 量化正确性 | LIVE 因子日刷 / 现金约束 / 资本配额 / 未复权成交价（迁移 `030`） |
 | 策略 sleeve | 同账户持仓按 strategy_version 隔离；执行后即过账；非调仓 hold；回测 lot T+1（迁移 `031`） |
+| 晋升质量门 | IC / 回撤 / 样本窗；`promotion_gate_*`（迁移 `032`） |
 | E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
 
-> **阶段 15（2026-07-27）**：策略 sleeve 持仓；execution 后立即 ledger post；非调仓日 portfolio hold；signal 失败短路；回测 FIFO lot + close 成交；force 有 posting 则禁止。下一优先：晋升质量门 / 残差 pending / 冲击成本。
+> **阶段 16（2026-07-27）**：晋升质量门——BACKTESTED/PAPER/LIVE 读 backtest +（LIVE）research IC；拒绝则落 `promotion_gate_result`；`--skip-gates` 须 reason。下一优先：残差 pending / 行业·ADV 风控 / 冲击成本。
+>
+> **阶段 15（2026-07-27）**：策略 sleeve 持仓；execution 后立即 ledger post；非调仓日 portfolio hold；signal 失败短路；回测 FIFO lot + close 成交；force 有 posting 则禁止。
 >
 > **阶段 14（2026-07-27）**：量化正确性 Critical：schedule 前刷 LIVE 因子；纸面成交现金约束；同账户资本配额；sizing/成交用未复权 `close`；目标腿 `can_sell`；风控账户合并敞口（迁移 `030`）。
 >
@@ -388,6 +391,21 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：迁移 `031`；pytest 全绿；README 同步。
 
+---
+
+## 阶段 16 · 晋升质量门（strategy_registry）
+
+### 任务 16.1 IC / DD / 样本窗门槛
+
+**要求**：
+1. 迁移 `032`：`promotion_gate_params`（版本化阈值）+ `promotion_gate_result`（评估审计）
+2. 晋升至 BACKTESTED / PAPER / LIVE 前评估：`backtest_run` 的 `max_drawdown` / `total_return` / 日历窗 / `trade_count`；LIVE 强制 `research_run.meta_json.report` IC
+3. 未通过拒绝晋升并落库失败结果；`--skip-gates` 须 `--reason`
+4. CLI / API 透传 `skip_gates` / `gate_version`；`strategy show` 展示近期 gate
+5. e2e 种子含 IC 报告与足够回测窗；pytest 覆盖 pass/reject
+
+**验收**：迁移 `032`；pytest 含门控用例；E2E 绿；相关 README / 任务书 / 根 changelog 同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -419,3 +437,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 13 | 13.1 exec/sm/alerts patch | 原子执行 / SM 门禁 / 告警分级 |
 | 14 | 14.1 quant correctness | 因子日刷 / 现金 / 配额 / close / 账户敞口 |
 | 15 | 15.1 sleeve + hold + lot T+1 | 策略持仓隔离 / 即过账 / 非调仓 hold / 回测对齐 |
+| 16 | 16.1 promotion gates | IC/DD/样本窗门槛；拒绝可审计 |

@@ -7,6 +7,8 @@ class PromoteBody(BaseModel):
     to: str = Field(..., description="BACKTESTED|PAPER|LIVE|RETIRED")
     backtest_run: str | None = None
     reason: str | None = None
+    skip_gates: bool = False
+    gate_version: str | None = None
 
 
 class KillBody(BaseModel):

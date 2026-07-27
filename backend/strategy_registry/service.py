@@ -3,11 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from strategy_registry.gates import (
+    DEFAULT_GATE_VERSION,
+    GATED_STATUSES,
+    evaluate_promotion_gates,
+    parse_thresholds,
+)
 from strategy_registry.models import (
     STRATEGY_KINDS,
     PromoteRequest,
@@ -21,6 +28,13 @@ from strategy_registry.transitions import validate_transition
 logger = logging.getLogger(__name__)
 
 _CODE_RE = re.compile(r"^[A-Za-z0-9_]{2,64}$")
+
+
+def _gate_version(explicit: str | None) -> str:
+    if explicit and explicit.strip():
+        return explicit.strip()
+    env = (os.environ.get("ASHARE_PROMOTION_GATE_VERSION") or "").strip()
+    return env or DEFAULT_GATE_VERSION
 
 
 def _utcnow() -> str:
@@ -160,6 +174,18 @@ class StrategyRegistryService:
                     message=f"backtest_run 不存在或未 committed: {bt_id}",
                 )
 
+        gate_meta: dict[str, Any] = {}
+        if request.to_status in GATED_STATUSES:
+            gate_res = self._run_promotion_gates(
+                request=request,
+                rec=rec,
+                bt_id=bt_id,
+            )
+            if gate_res is not None:
+                return gate_res
+            # _run_promotion_gates 把通过信息挂到 request 上不便；再读一次最近结果
+            gate_meta = {"gates_passed": True}
+
         retire: list[tuple[str, str]] = []
         if request.to_status == "LIVE":
             live = self.repo.find_live(rec.strategy_code)
@@ -211,7 +237,125 @@ class StrategyRegistryService:
             strategy_code=rec.strategy_code,
             from_status=rec.status,
             to_status=request.to_status,
-            meta={"retired": [v for v, _ in retire]},
+            meta={"retired": [v for v, _ in retire], **gate_meta},
+        )
+
+    def _run_promotion_gates(
+        self,
+        *,
+        request: PromoteRequest,
+        rec: StrategyRecord,
+        bt_id: str | None,
+    ) -> RegistryResult | None:
+        """返回 RegistryResult 表示拦截；None 表示通过（含 skip）。"""
+        now = _utcnow()
+        gate_ver = _gate_version(request.gate_version)
+        params = self.repo.get_gate_params(gate_ver)
+        if not params:
+            return RegistryResult(
+                status="failed",
+                strategy_version=rec.strategy_version,
+                strategy_code=rec.strategy_code,
+                from_status=rec.status,
+                to_status=request.to_status,
+                message=f"promotion_gate_params 版本不存在: {gate_ver}",
+            )
+
+        if request.skip_gates:
+            if not (request.reason or "").strip():
+                return RegistryResult(
+                    status="invalid",
+                    strategy_version=rec.strategy_version,
+                    strategy_code=rec.strategy_code,
+                    from_status=rec.status,
+                    to_status=request.to_status,
+                    message="--skip-gates 必须提供 --reason",
+                )
+            self.repo.insert_gate_result(
+                {
+                    "gate_id": f"pg_{uuid.uuid4().hex}",
+                    "strategy_version": rec.strategy_version,
+                    "to_status": request.to_status,
+                    "gate_version": gate_ver,
+                    "passed": True,
+                    "skipped": True,
+                    "backtest_run_id": bt_id,
+                    "research_run_id": rec.research_run_id,
+                    "metrics": {"skipped": True},
+                    "checks": [
+                        {
+                            "name": "skip_gates",
+                            "ok": True,
+                            "actual": True,
+                            "threshold": "explicit skip",
+                            "message": request.reason,
+                        }
+                    ],
+                    "actor": request.actor,
+                    "reason": request.reason,
+                    "created_at": now,
+                }
+            )
+            logger.warning(
+                "promotion gates skipped version=%s to=%s actor=%s reason=%s",
+                rec.strategy_version,
+                request.to_status,
+                request.actor,
+                request.reason,
+            )
+            return None
+
+        thresholds = parse_thresholds(params.get("thresholds_json"))
+        backtest = self.repo.get_backtest_metrics(bt_id) if bt_id else None
+        research_meta = None
+        research_id = rec.research_run_id
+        if research_id:
+            st, meta = self.repo.get_research_meta(research_id)
+            if st == "committed":
+                research_meta = meta
+            else:
+                research_id = None
+
+        evaluation = evaluate_promotion_gates(
+            to_status=request.to_status,
+            thresholds_by_status=thresholds,
+            gate_version=gate_ver,
+            backtest=backtest,
+            research_meta=research_meta,
+            research_run_id=research_id,
+        )
+        self.repo.insert_gate_result(
+            {
+                "gate_id": f"pg_{uuid.uuid4().hex}",
+                "strategy_version": rec.strategy_version,
+                "to_status": request.to_status,
+                "gate_version": gate_ver,
+                "passed": evaluation.passed,
+                "skipped": False,
+                "backtest_run_id": bt_id,
+                "research_run_id": research_id,
+                "metrics": evaluation.metrics,
+                "checks": [c.as_dict() for c in evaluation.checks],
+                "actor": request.actor,
+                "reason": request.reason,
+                "created_at": now,
+            }
+        )
+        if evaluation.passed:
+            return None
+        return RegistryResult(
+            status="failed",
+            strategy_version=rec.strategy_version,
+            strategy_code=rec.strategy_code,
+            from_status=rec.status,
+            to_status=request.to_status,
+            message=evaluation.message or "质量门未通过",
+            meta={
+                "gates_passed": False,
+                "gate_version": gate_ver,
+                "failing": evaluation.failing_names(),
+                "metrics": evaluation.metrics,
+            },
         )
 
     def retire(

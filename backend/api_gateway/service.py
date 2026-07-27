@@ -65,6 +65,8 @@ class GatewayService:
         backtest_run: str | None,
         reason: str | None,
         actor: str,
+        skip_gates: bool = False,
+        gate_version: str | None = None,
     ) -> dict:
         from strategy_registry.models import PromoteRequest
         from strategy_registry.service import StrategyRegistryService
@@ -76,6 +78,8 @@ class GatewayService:
                 backtest_run_id=backtest_run,
                 reason=reason,
                 actor=actor,
+                skip_gates=skip_gates,
+                gate_version=gate_version,
             )
         )
         if result.status == "ok":
@@ -95,6 +99,7 @@ class GatewayService:
                 result.message or result.status,
                 status=400,
                 strategy_version=result.strategy_version,
+                meta=result.meta or None,
             )
             code = 400
         self._audit(
@@ -102,7 +107,13 @@ class GatewayService:
             method="POST",
             path=f"/v1/strategies/{strategy_version}/promote",
             status_code=code,
-            request={"to": to_status, "backtest_run": backtest_run, "reason": reason},
+            request={
+                "to": to_status,
+                "backtest_run": backtest_run,
+                "reason": reason,
+                "skip_gates": skip_gates,
+                "gate_version": gate_version,
+            },
             result=body,
         )
         return body

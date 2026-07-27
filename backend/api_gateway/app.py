@@ -86,6 +86,8 @@ def create_app() -> Any:
                 backtest_run=payload.backtest_run,
                 reason=payload.reason,
                 actor=actor,
+                skip_gates=payload.skip_gates,
+                gate_version=payload.gate_version,
             )
         )
 

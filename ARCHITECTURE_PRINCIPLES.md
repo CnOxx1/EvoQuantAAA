@@ -38,7 +38,7 @@
 | data_quality | `backend/data_quality/` | DQ 门禁；未通过禁止进研究/生产信号 |
 | research_lab | `backend/research_lab/` | 实验因子/信号（可脏、不直接实盘） |
 | signal_prod | `backend/signal_prod/` | 已晋升的生产信号（带版本） |
-| strategy_registry | `backend/strategy_registry/` | 策略/因子版本、参数、晋升状态 |
+| strategy_registry | `backend/strategy_registry/` | 策略/因子版本、晋升状态与质量门 |
 | backtest | `backend/backtest/` | A 股约束回测与报告 |
 | portfolio_construct | `backend/portfolio_construct/` | 组合构建 → 目标持仓（草稿） |
 | risk_engine | `backend/risk_engine/` | 事前/硬风控、Kill Switch；可否决执行 |
@@ -59,7 +59,7 @@
 2. **编排只传引用**：`orchestrator` 或事件载荷仅含 ID，不含行情/因子全量。  
 3. **契约先于代码**：先改 `database/`，再改读写模块与双方 README。  
 4. **DQ 门禁**：`data_quality` 未通过的批次，不得被 `research_lab` / `signal_prod` 消费。  
-5. **研究/生产隔离**：实验产出不得直接进 `execution`；须经 `strategy_registry` 晋升后由 `signal_prod` 生成。  
+5. **研究/生产隔离**：实验产出不得直接进 `execution`；须经 `strategy_registry` 晋升后由 `signal_prod` 生成；晋升 BACKTESTED/PAPER/LIVE 须过质量门（或显式 skip 审计）。  
 6. **风控硬否决**：`risk_engine` 未放行或 Kill Switch 开启时，`execution` 不得新开仓。  
 7. **OMS ≠ 账本**：`execution` 写订单/成交事件；`ledger` 负责过账与可卖数量。  
 8. **多策略同账户**：现金共享，持仓按 `strategy_version` sleeve 隔离；差额成交不得动他策略仓。  
@@ -165,7 +165,7 @@
 │   ├── portfolio_construct/ risk_engine/ execution/ ledger/
 │   ├── ops_monitor/ e2e/ tests/
 └── database/
-    ├── migrations/       # 001–031
+    ├── migrations/       # 001–032
     ├── schema/           # 产消登记
     └── seeds/
 ```

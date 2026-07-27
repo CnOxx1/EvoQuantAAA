@@ -49,8 +49,8 @@ def _weekdays(start: str, end: str) -> list[str]:
     return out
 
 
-def seed_minimal() -> str:
-    """写入 E2E 专用 universe / bars / factors / account；返回假 backtest_run_id。"""
+def seed_minimal() -> tuple[str, str]:
+    """写入 E2E 专用 universe / bars / factors / account；返回 (backtest_run_id, research_run_id)。"""
     symbols = [f"{600000 + i:06d}" for i in range(10)]
     bar_start = (date.fromisoformat(START) - timedelta(days=25)).isoformat()
     dates = _weekdays(bar_start, END)
@@ -62,6 +62,16 @@ def seed_minimal() -> str:
     batch_id = f"pb_e2e_{uuid.uuid4().hex[:12]}"
     bt = f"bt_e2e_{uuid.uuid4().hex[:12]}"
     now = _utcnow()
+    research_meta = {
+        "mode": "evaluate",
+        "e2e": True,
+        "report": {
+            "ic_mean": 0.05,
+            "icir": 0.8,
+            "ic_days": 20,
+            "ic_win_rate": 0.55,
+        },
+    }
 
     with get_conn() as conn:
         conn.execute(
@@ -99,7 +109,7 @@ def seed_minimal() -> str:
             ) VALUES (?, ?, ?, ?, ?, 'committed', ?, ?)
             ON CONFLICT (run_id) DO NOTHING
             """,
-            (run_id, FACTOR, UNIVERSE, dates[0], END, json.dumps({"e2e": True}), now),
+            (run_id, FACTOR, UNIVERSE, dates[0], END, json.dumps(research_meta), now),
         )
 
         for di, d in enumerate(dates):
@@ -147,11 +157,28 @@ def seed_minimal() -> str:
             """,
             (ACCOUNT, NAV, json.dumps({"e2e": True}), now),
         )
+        # 清空历史持仓/sleeve，保证差额成交产生 fill（可重复跑）
+        conn.execute(
+            "DELETE FROM ledger_lot WHERE account_id=?",
+            (ACCOUNT,),
+        )
+        conn.execute(
+            "DELETE FROM ledger_sleeve_position WHERE account_id=?",
+            (ACCOUNT,),
+        )
+        conn.execute(
+            """
+            DELETE FROM ledger_balance
+            WHERE account_id=? AND asset_type='POSITION'
+            """,
+            (ACCOUNT,),
+        )
         conn.execute(
             """
             INSERT INTO ledger_balance (account_id, asset_type, symbol, qty, updated_at)
             VALUES (?, 'CASH', '', ?, ?)
-            ON CONFLICT (account_id, asset_type, symbol) DO NOTHING
+            ON CONFLICT (account_id, asset_type, symbol) DO UPDATE SET
+                qty=EXCLUDED.qty, updated_at=EXCLUDED.updated_at
             """,
             (ACCOUNT, NAV, now),
         )
@@ -180,13 +207,25 @@ def seed_minimal() -> str:
                 dq_required, meta_json, created_at, finished_at
             ) VALUES (
                 ?, ?, 'committed', ?, ?, ?, 'qfq', ?, ?,
-                ?, 0.01, 0.0, 0.0, 1, 0, ?, ?, ?
+                ?, 0.01, 0.0, 0.05, 3, 0, ?, ?, ?
             )
             ON CONFLICT (run_id) DO NOTHING
             """,
-            (bt, STRATEGY_CODE, START, END, UNIVERSE, COST, NAV, NAV * 1.01, json.dumps({"e2e": True}), now, now),
+            (
+                bt,
+                STRATEGY_CODE,
+                dates[0],
+                END,
+                UNIVERSE,
+                COST,
+                NAV,
+                NAV * 1.01,
+                json.dumps({"e2e": True}),
+                now,
+                now,
+            ),
         )
-    return bt
+    return bt, run_id
 
 
 def _fail(step: str, msg: str) -> int:
@@ -197,10 +236,10 @@ def _fail(step: str, msg: str) -> int:
 def run() -> int:
     print(f"e2e start as_of={AS_OF} universe={UNIVERSE} account={ACCOUNT}")
     try:
-        bt_id = seed_minimal()
+        bt_id, research_id = seed_minimal()
     except Exception as exc:  # noqa: BLE001
         return _fail("seed", str(exc))
-    print(f"seed=ok backtest={bt_id}")
+    print(f"seed=ok backtest={bt_id} research={research_id}")
 
     from strategy_registry.models import PromoteRequest, RegisterRequest
     from strategy_registry.service import StrategyRegistryService
@@ -220,6 +259,7 @@ def run() -> int:
                 "universe_code": UNIVERSE,
                 "factor_type": "qfq",
             },
+            research_run_id=research_id,
             note="e2e smoke",
             actor="e2e",
         )

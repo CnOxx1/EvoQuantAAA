@@ -192,6 +192,8 @@ def cmd_strategy(args: argparse.Namespace) -> int:
                 backtest_run_id=args.backtest_run,
                 reason=args.reason,
                 retire_previous_live=not args.no_retire_previous,
+                skip_gates=bool(getattr(args, "skip_gates", False)),
+                gate_version=getattr(args, "gate_version", None),
             )
         )
         print(
@@ -202,6 +204,8 @@ def cmd_strategy(args: argparse.Namespace) -> int:
             print(f"message={result.message}")
         if result.meta.get("retired"):
             print(f"retired={','.join(result.meta['retired'])}")
+        if result.meta.get("failing"):
+            print(f"gates_failing={','.join(result.meta['failing'])}")
         return 0 if result.status == "ok" else 2
 
     if action == "retire":
@@ -248,6 +252,12 @@ def cmd_strategy(args: argparse.Namespace) -> int:
             print(
                 f"transition {t.get('from_status')}->{t.get('to_status')} "
                 f"at={t.get('created_at')} reason={t.get('reason')}"
+            )
+        for g in svc.repo.list_gate_results(rec.strategy_version, limit=5):
+            print(
+                f"gate to={g.get('to_status')} passed={g.get('passed')} "
+                f"skipped={g.get('skipped')} ver={g.get('gate_version')} "
+                f"at={g.get('created_at')}"
             )
         return 0
 
@@ -2609,6 +2619,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-retire-previous",
         action="store_true",
         help="晋升 LIVE 时若已有同 code LIVE 则失败（默认自动停用旧版）",
+    )
+    p_st_pro.add_argument(
+        "--skip-gates",
+        action="store_true",
+        help="跳过晋升质量门（须同时给 --reason；仅应急）",
+    )
+    p_st_pro.add_argument(
+        "--gate-version",
+        default=None,
+        help="promotion_gate_params.version（默认 v1_default / 环境变量）",
     )
     p_st_pro.set_defaults(func=cmd_strategy)
 

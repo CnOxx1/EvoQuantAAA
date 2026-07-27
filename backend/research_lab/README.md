@@ -8,7 +8,7 @@
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
 | 因子值 | `research_factor_value` | `research` 计算任务 UPSERT（幂等） |
-| 实验运行 | `research_run` | 计算/评估任务元数据 + `meta_json` |
+| 实验运行 | `research_run` | 计算/评估任务元数据 + `meta_json`（`report.ic_*` 供晋升 LIVE 质量门） |
 
 迁移：`database/migrations/017_research_lab.sql`。
 
@@ -34,6 +34,7 @@
 | security_master | `../security_master/README.md` | Universe 快照 | 过滤标的 |
 | alpha_fundamental / alpha_flow | `../data_ingest/...` | 估值/资金 raw | 上游（经库）；schedule 含 valuation+stock_flow |
 | backtest | `../backtest/README.md` | 回测 | `FACTOR_TOP_N` 经库读本表；禁止互相 import |
+| strategy_registry | `../strategy_registry/README.md` | 晋升 | LIVE 质量门读本表 IC 报告 |
 | orchestrator | `../orchestrator/README.md` | 日更 | `factor_refresh` 调本模块重算 LIVE 因子 |
 | signal_prod | `../signal_prod/README.md` | 生产信号 | 下游只读本表（经库） |
 

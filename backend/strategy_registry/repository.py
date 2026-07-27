@@ -154,6 +154,92 @@ class StrategyRegistryRepository:
             ).fetchone()
         return bool(row)
 
+    def get_backtest_metrics(self, run_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT run_id, status, start_date, end_date,
+                       total_return, max_drawdown, trade_count,
+                       benchmark_return, final_nav
+                FROM backtest_run
+                WHERE run_id=?
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_research_meta(self, run_id: str) -> tuple[str | None, Any]:
+        """返回 (status, meta_json)；不存在则 (None, None)。"""
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT status, meta_json FROM research_run
+                WHERE run_id=?
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return None, None
+        d = dict(row)
+        return str(d.get("status") or ""), d.get("meta_json")
+
+    def get_gate_params(self, version: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT version, thresholds_json, meta_json, created_at
+                FROM promotion_gate_params
+                WHERE version=?
+                LIMIT 1
+                """,
+                (version,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def insert_gate_result(self, row: dict[str, Any]) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO promotion_gate_result (
+                    gate_id, strategy_version, to_status, gate_version,
+                    passed, skipped, backtest_run_id, research_run_id,
+                    metrics_json, checks_json, actor, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["gate_id"],
+                    row["strategy_version"],
+                    row["to_status"],
+                    row["gate_version"],
+                    1 if row.get("passed") else 0,
+                    1 if row.get("skipped") else 0,
+                    row.get("backtest_run_id"),
+                    row.get("research_run_id"),
+                    json.dumps(row.get("metrics") or {}, ensure_ascii=False),
+                    json.dumps(row.get("checks") or [], ensure_ascii=False),
+                    row.get("actor"),
+                    row.get("reason"),
+                    row["created_at"],
+                ),
+            )
+
+    def list_gate_results(
+        self, strategy_version: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM promotion_gate_result
+                WHERE strategy_version=?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (strategy_version, max(1, min(limit, 100))),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def apply_transition(
         self,
         *,

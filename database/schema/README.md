@@ -96,6 +96,8 @@
 | research_* | oltp | research_lab | strategy_registry, backtest | run_id | 非 live |
 | strategy_version | oltp | strategy_registry | signal_prod, backtest | strategy_version | 状态机 DRAFT→…→LIVE；同 code 至多一 LIVE |
 | strategy_transition | oltp | strategy_registry | ops_monitor, api_gateway | transition_id | 晋升/停用审计 |
+| promotion_gate_params | ref_data | migrations 种子 | strategy_registry | version | 晋升质量门阈值（按目标状态） |
+| promotion_gate_result | oltp | strategy_registry | ops_monitor, api_gateway | gate_id | 每次晋升评估审计（含 skip） |
 | signal_batch | oltp | signal_prod | portfolio_construct, ops_monitor | signal_batch_id | PAPER/LIVE 运行批次 |
 | signal_prod_weight | oltp | signal_prod | portfolio_construct, backtest | (strategy_version, trade_date, symbol) | 调仓日目标权重；幂等 |
 | portfolio_target | oltp | portfolio_construct | risk_engine, execution | portfolio_id | draft→approved/rejected→executed；`(version,as_of,account)` 活跃唯一 |

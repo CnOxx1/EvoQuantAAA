@@ -45,7 +45,7 @@
 | GET | `/health` | 健康检查（无鉴权） |
 | GET | `/v1/strategies` | 策略列表 `?status=` |
 | GET | `/v1/strategies/{version}` | 策略详情 |
-| POST | `/v1/strategies/{version}/promote` | 晋升 `{to, backtest_run?, reason?}` |
+| POST | `/v1/strategies/{version}/promote` | 晋升 `{to, backtest_run?, reason?, skip_gates?, gate_version?}`；质量门失败 400 + meta.failing |
 | GET | `/v1/portfolios` | 组合列表 |
 | GET | `/v1/portfolios/{id}` | 组合+持仓 |
 | GET | `/v1/risk/kill` | 查询 Kill Switch |

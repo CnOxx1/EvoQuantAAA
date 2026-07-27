@@ -8,7 +8,7 @@
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
 | 费用参数 | `cost_params` | 迁移种子 `v1_ashare_default` |
-| 回测运行 | `backtest_run` | 开始 running → committed/failed |
+| 回测运行 | `backtest_run` | 开始 running → committed/failed；`max_drawdown`/`total_return`/日期窗供晋升质量门 |
 | 日净值 | `backtest_nav` | 每日 cash/市值/基准 |
 | 成交假设 | `backtest_trade` | 建仓/调仓成交 |
 

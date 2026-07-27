@@ -26,7 +26,7 @@
 | data_quality | `data_quality/` | DQ 门禁（未通过不得进信号） |
 | research_lab | `research_lab/` | 实验因子/信号（不可直接实盘） |
 | signal_prod | `signal_prod/` | 已晋升生产信号（带版本） |
-| strategy_registry | `strategy_registry/` | 策略/因子版本与晋升状态 |
+| strategy_registry | `strategy_registry/` | 策略版本、晋升状态与质量门（IC/DD） |
 | backtest | `backtest/` | A 股约束回测与报告 |
 | portfolio_construct | `portfolio_construct/` | 组合构建 → 目标持仓草稿 |
 | risk_engine | `risk_engine/` | 硬风控、Kill Switch；可否决执行 |
@@ -80,7 +80,7 @@ python main.py data_quality --scope CORE --universe TOP100 --start 2023-01-01 --
 python main.py backtest --universe TOP100 --start 2023-01-01 --end 2026-07-23 \
   --strategy EW_HOLD --factor-type qfq
 
-# 策略晋升 → 生产信号 → 组合草稿（短窗冒烟；晋升前先有 committed backtest_run）
+# 策略晋升 → 生产信号 → 组合草稿（短窗冒烟；晋升前先有 committed backtest_run；LIVE 需 research IC）
 python main.py strategy register --code FTN_MOM20 --kind FACTOR_TOP_N \
   --factor MOM_20 --top-n 20 --rebalance-days 20
 python main.py signal run --live --as-of 2026-07-23

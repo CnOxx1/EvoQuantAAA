@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`031`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`032`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -38,6 +38,7 @@
 | `029_prod_hardening.sql` | 组合按日活跃唯一；execution/ledger `running` 唯一 |
 | `030_quant_correctness.sql` | `portfolio_target_position.can_sell`；`strategy_capital_alloc` |
 | `031_strategy_sleeve.sql` | `ledger_sleeve_position`；`ledger_lot.strategy_version` |
+| `032_promotion_gates.sql` | `promotion_gate_params` / `promotion_gate_result`（晋升质量门） |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

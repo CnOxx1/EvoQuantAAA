@@ -53,6 +53,9 @@ class PromoteRequest:
     actor: str = "cli"
     # 晋升 LIVE 时若已有同 code LIVE：retire_previous=True 则自动停用旧版
     retire_previous_live: bool = True
+    # 质量门：默认强制；skip_gates 仅应急（须写 reason）
+    skip_gates: bool = False
+    gate_version: str | None = None
 
 
 @dataclass
