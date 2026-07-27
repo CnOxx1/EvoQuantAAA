@@ -20,7 +20,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `018`（含 PIT 快照），**新迁移从 `019` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `019`（含 `ops_alert`），**新迁移从 `020` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -45,8 +45,11 @@
 | pytest（engine/compute/rules/research） | `backend/tests/` |
 | 基线因子 MOM_20 / VAL_PE_PCT / FLOW_NET_5 + IC 评估 | `backend/research_lab/` |
 | 交易日增量流水线 `python main.py daily` | `backend/main.py::cmd_daily` |
+| 日更编排 `python main.py schedule --once/--at` | `backend/orchestrator/scheduler.py` |
+| 失败告警 `ops_alert` + 可选 webhook | `backend/ops_monitor/notify.py` |
+| 覆盖度矩阵 `python main.py coverage` | `backend/ops_monitor/coverage.py` |
 
-> **阶段 3 状态（2026-07-25）**：3.1–3.5 已落地（PIT / 除权校验 / 成分点时 meta / 涨跌停推导 / ALPHA DQ）。下一优先：**阶段 4.1 orchestrator schedule**。
+> **阶段 4 状态（2026-07-27）**：4.1–4.4 已落地（schedule / ops_alert / coverage / 新闻去重水位回看）。`DEVELOPMENT_PLAN` 主线任务至此收官；后续按需扩生产链路。
 
 ---
 

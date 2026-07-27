@@ -101,7 +101,8 @@
 | backtest_run | oltp | backtest | frontend/backtest_view, research_lab, ops_monitor | run_id | running→committed/failed |
 | backtest_nav | oltp | backtest | frontend/backtest_view | (run_id, trade_date) | 日净值与基准 |
 | backtest_trade | oltp | backtest | frontend/backtest_view | run_id | 成交假设 |
-| job_status | oltp | orchestrator | ops_monitor, api_gateway | job_id | 状态机 |
+| ops_alert | oltp | ops_monitor | frontend/ops, orchestrator | alert_id | 失败告警；可选 webhook |
+| job_status | oltp | orchestrator | ops_monitor, api_gateway | job_id | 状态机（待扩展） |
 
 ## 费用模型
 

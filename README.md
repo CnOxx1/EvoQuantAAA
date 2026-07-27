@@ -50,7 +50,7 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 │   ├── shared/                  # DB / 配置 / Universe 解析等
 │   └── …（orchestrator、research_lab、risk_engine 等骨架）
 ├── database/
-│   ├── migrations/              # 001–018 SQL（权威演进）
+│   ├── migrations/              # 001–019 SQL（权威演进）
 │   ├── schema/                  # 产消契约说明
 │   └── seeds/
 └── scripts/                     # 辅助脚本
@@ -81,7 +81,7 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 
 | 阶段 | 模块 | 状态摘要 |
 | --- | --- | --- |
-| 契约 | `database/migrations` 001–018 | 已应用 |
+| 契约 | `database/migrations` 001–019 | 已应用 |
 | CORE 参考 | `core_ref` | 日历/上市/行业/股本/成分/ST/解禁 |
 | CORE 行情 | `core_market` | 日线、复权、停牌、涨跌停、指数、公司行为、市场排名、盘口异动、板块日线；TOP100 长窗样本已 DQ pass |
 | 加工 | `data_process` | 复权/掩码；涨跌停价格推导；`fundamental_pit` |
@@ -89,11 +89,13 @@ EvoQuantAAA 是一套面向 **A 股实盘约束** 的量化研究与生产骨架
 | Universe | `security_master` | 默认 `TOP100` / `SECTOR_LEADERS`（全市场仅按需） |
 | 回测 | `backtest` | `EW_HOLD` / `EW_REBALANCE` / `FACTOR_TOP_N`；T+1、印花税、整手 |
 | 研究 | `research_lab` | 基线因子落库 + RankIC/分层；经库对接回测 |
+| 编排 | `orchestrator` | `schedule --once/--at`：daily→快照→ALPHA→告警 |
+| 运维 | `ops_monitor` | `ops_alert` + `coverage` 覆盖度矩阵 |
 | ALPHA | announcement / fundamental / flow / news / contract / relation | 财报估值股东、资金两融龙虎榜、公告、新闻/政策、合同中标、个股关系边（图谱） |
 
 ### 3.2 骨架/待建
 
-`orchestrator`、`signal_prod`、`strategy_registry`、`portfolio_construct`、`risk_engine`、`execution`、`ledger`、`ops_monitor`、`api_gateway`、多数 `frontend/*`。
+`signal_prod`、`strategy_registry`、`portfolio_construct`、`risk_engine`、`execution`、`ledger`、`api_gateway`、多数 `frontend/*`。
 
 ---
 
@@ -178,6 +180,13 @@ python main.py alpha_flow --kind block_trade --start 2026-07-01 --end 2026-07-23
 
 > 维护约定：有可合并的功能/数据里程碑时，在本节**顶部**追加一条（新→旧）。  
 > 格式：日期 · 标题 · 要点列表 ·（可选）影响范围。
+
+### 2026-07-27 · 编排与运维收尾（阶段 4）
+
+- `schedule --once/--at`：daily → security_master → news/policy/valuation → ALPHA DQ → `ops_alert`
+- 迁移 `019`：`ops_alert`；可选 `ASHARE_ALERT_WEBHOOK`
+- `coverage`：核心表×月份覆盖度（只读）
+- 新闻：标题去重、水位回看 24h、`--symbol-map` 简称回填
 
 ### 2026-07-25 · PIT 与数据正确性（阶段 3）
 

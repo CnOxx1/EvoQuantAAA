@@ -9,8 +9,9 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from data_ingest.alpha_news_monitor.models import FetchRequest
-from data_ingest.alpha_news_monitor.repository import NewsRepository
+from data_ingest.alpha_news_monitor.dedupe import dedupe_news_records
+from data_ingest.alpha_news_monitor.models import FetchRequest, NewsRecord
+from data_ingest.alpha_news_monitor.repository import NewsRepository, lookback_watermark
 from data_ingest.alpha_news_monitor.service import NewsIngestService
 from data_ingest.alpha_news_monitor.sources import get_source
 from shared.db import apply_migration_file, get_conn
@@ -26,6 +27,31 @@ def _apply_all_migrations() -> None:
 def main() -> int:
     setup_logging("WARNING")
     _apply_all_migrations()
+
+    # 纯函数：重复标题去重
+    dups = dedupe_news_records(
+        [
+            NewsRecord(
+                source_news_id="a",
+                title="重复标题测试",
+                publish_time="2026-07-01T10:00:00+00:00",
+                channel="official",
+                source="mock_a",
+            ),
+            NewsRecord(
+                source_news_id="b",
+                title="重复标题测试",
+                publish_time="2026-07-01T11:00:00+00:00",
+                channel="official",
+                source="mock_b",
+            ),
+        ]
+    )
+    assert len(dups) == 1 and dups[0].source == "mock_a"
+    assert lookback_watermark("2026-07-02T00:00:00+00:00", hours=24).startswith(
+        "2026-07-01"
+    )
+
     with get_conn() as conn:
         conn.execute("DELETE FROM raw_news_media WHERE source='mock'")
         conn.execute("DELETE FROM ingest_news_watermark WHERE source='mock'")

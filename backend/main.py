@@ -610,6 +610,65 @@ def cmd_core_market(args: argparse.Namespace) -> int:
     return 0 if result.status == "committed" else 2
 
 
+def cmd_schedule(args: argparse.Namespace) -> int:
+    from orchestrator.scheduler import run_at_loop, run_once
+
+    if args.at:
+        if args.once:
+            print("status=invalid message=--once 与 --at 互斥")
+            return 2
+        try:
+            run_at_loop(
+                at_hhmm=args.at,
+                universe=args.universe or "TOP100",
+                factor_type=args.factor_type,
+                force=bool(args.force),
+            )
+        except ValueError as exc:
+            print(f"status=invalid message={exc}")
+            return 2
+        return 0
+
+    # 默认等价 --once
+    result = run_once(
+        as_of=args.as_of,
+        universe=args.universe or "TOP100",
+        factor_type=args.factor_type,
+        force=bool(args.force),
+        job_id=args.job_id,
+    )
+    if result.status == "skipped":
+        return 0
+    # CORE 失败 → 2；仅 ALPHA 失败仍 0（不阻断）
+    if result.status == "failed":
+        return 2
+    return 0
+
+
+def cmd_coverage(args: argparse.Namespace) -> int:
+    from ops_monitor.coverage import build_coverage_matrix, format_coverage_report
+    from shared.ingest_batching import resolve_symbols_from_args
+
+    symbols: list[str] = []
+    if args.universe:
+        try:
+            sid, symbols = resolve_symbols_from_args(
+                universe=args.universe,
+                symbols=[],
+                as_of=args.universe_as_of or args.start,
+                as_of_end=args.end,
+            )
+        except ValueError as exc:
+            print(f"status=invalid message={exc}")
+            return 2
+        print(f"universe={args.universe} snapshot_id={sid} members={len(symbols)}")
+    report = build_coverage_matrix(
+        start=args.start, end=args.end, symbols=symbols or None
+    )
+    print(format_coverage_report(report))
+    return 0
+
+
 def cmd_daily(args: argparse.Namespace) -> int:
     """交易日增量：CORE 行情 + 排名/异动 → process → DQ（ALPHA 可选）。"""
     from datetime import date
@@ -790,6 +849,7 @@ def cmd_alpha_news_monitor(args: argparse.Namespace) -> int:
         job_id=args.job_id,
         media_filters=[m.strip() for m in (getattr(args, "media", None) or []) if m.strip()],
         forum_top_n=int(getattr(args, "forum_top_n", None) or 200),
+        symbol_map=bool(getattr(args, "symbol_map", False)),
     )
     try:
         result = service.run(request)
@@ -1514,6 +1574,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_news.add_argument("--job-id", default=None)
     p_news.add_argument("--no-fallback", action="store_true")
+    p_news.add_argument(
+        "--symbol-map",
+        action="store_true",
+        help="标题含股票简称时回填 symbol（读 raw_security_listing）",
+    )
     p_news.set_defaults(func=cmd_alpha_news_monitor)
 
     p_proc = sub.add_parser("data_process", help="运行数据处理（raw → processed）")
@@ -1586,6 +1651,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_daily.add_argument("--job-id", default=None)
     p_daily.set_defaults(func=cmd_daily)
+
+    p_sched = sub.add_parser(
+        "schedule",
+        help="日更编排：daily→security_master→ALPHA→ALPHA DQ→告警",
+    )
+    p_sched.add_argument(
+        "--once",
+        action="store_true",
+        help="跑一轮后退出（供 cron）",
+    )
+    p_sched.add_argument(
+        "--at",
+        default=None,
+        help="进程内定时 HH:MM（与 --once 互斥）",
+    )
+    p_sched.add_argument("--as-of", help="YYYY-MM-DD，默认今天")
+    p_sched.add_argument(
+        "--universe",
+        default="TOP100",
+        choices=list(UNIVERSE_CHOICES),
+    )
+    p_sched.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
+    p_sched.add_argument(
+        "--force",
+        action="store_true",
+        help="非开市日也强制跑一轮",
+    )
+    p_sched.add_argument("--job-id", default=None)
+    p_sched.set_defaults(func=cmd_schedule)
+
+    p_cov = sub.add_parser("coverage", help="核心表按月覆盖度矩阵（只读）")
+    p_cov.add_argument("--start", required=True, help="YYYY-MM-DD")
+    p_cov.add_argument("--end", required=True, help="YYYY-MM-DD")
+    p_cov.add_argument(
+        "--universe",
+        choices=list(UNIVERSE_CHOICES),
+        help="按 Universe 过滤含 symbol 的表",
+    )
+    p_cov.add_argument("--universe-as-of", help="Universe 点时日，默认 --start")
+    p_cov.set_defaults(func=cmd_coverage)
 
     p_sm = sub.add_parser("security_master", help="生成 Universe 日快照")
     p_sm.add_argument(

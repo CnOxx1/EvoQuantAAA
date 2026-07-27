@@ -83,6 +83,8 @@ class FetchRequest:
     # 子源过滤；空=该 kind 的默认集合
     media_filters: list[str] = field(default_factory=list)
     forum_top_n: int = 200
+    # 标题命中简称时回填 symbol（读 raw_security_listing）
+    symbol_map: bool = False
 
 
 @dataclass

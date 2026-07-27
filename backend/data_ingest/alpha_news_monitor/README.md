@@ -63,8 +63,17 @@ python main.py alpha_news_monitor --kind news_policy --media cls_policy --media 
 python main.py alpha_news_monitor --kind news_policy --media cctv --start 2026-07-22 --end 2026-07-23
 python main.py alpha_news_monitor --kind news_policy --media econ --end 2026-07-24
 
+# 个股资讯：标题去重 + 简称→symbol 回填（读 raw_security_listing）
+python main.py alpha_news_monitor --kind news_watchlist --symbol 600000 --symbol-map
+
 python -m data_ingest.alpha_news_monitor.selfcheck
 ```
+
+### 增量水位与去重（阶段 4.4）
+
+- **水位回看**：读取 `ingest_news_watermark` 后，实际 fetch 起点再往前 **24h**（`lookback_watermark`），降低边界漏抓。
+- **标题去重**：同批内 `(normalized_title, channel)` 去重；跨源同题可保留不同 `source`（幂等键仍是 `source_news_id`+`source`）。
+- **`--symbol-map`**：对缺 `symbol` 的记录用 `security_listing` 简称精确匹配回填（点时仍用 `publish_time`）。
 
 ### 真实源接口映射（`akshare`）
 

@@ -1,48 +1,44 @@
 # orchestrator
 
 ## 名称
-流水线编排：DAG/定时任务；只传引用 ID，不搬运业务载荷。
+流水线编排：日更任务序列；只传 `job_id` / batch 引用，不搬运业务载荷。
 
 ## 生产数据与落库表
 
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
-| 任务状态 | `job_status` | 创建/更新/完成/失败任务时 |
+| （间接）失败告警 | `ops_alert` | 每轮末尾经 `ops_monitor.notify` |
+| 各模块 batch / dq_run | 既有表 | 子任务写入；本模块只传 `job_id` |
 
+迁移：`019_ops_schedule.sql`（`ops_alert`）。
 
-## 本目录模块一览
-无子模块；本目录即单一模块实现。
+## 任务序列（`schedule`）
 
-## 协作模块索引（供 AI Agent）
-
-| 模块 | README | 主要作用 | 与本模块关系 |
-| --- | --- | --- | --- |
-| backend（父） | `../README.md` | 总览 | 父目录 |
-| api_gateway | `../api_gateway/README.md` | 外部触发入口 | 上游（人工/API 触发） |
-| data_ingest | `../data_ingest/README.md` | 获取 | 下游任务 |
-| data_process | `../data_process/README.md` | 加工 | 下游任务 |
-| data_quality | `../data_quality/README.md` | DQ | 下游任务 |
-| signal_prod | `../signal_prod/README.md` | 生产信号 | 下游任务 |
-| portfolio_construct | `../portfolio_construct/README.md` | 组合 | 下游任务 |
-| risk_engine | `../risk_engine/README.md` | 风控 | 下游任务 |
-| execution | `../execution/README.md` | 执行 | 下游任务 |
-| ops_monitor | `../ops_monitor/README.md` | 监控重跑 | 可请求重跑（传 ID） |
-
-## 边界
-- 做：定义并执行任务图；记录 `job_id` 状态；按依赖触发下游（载荷仅 ID）。
-- 不做：实现各域算法；读写业务大表做计算；被业务模块反向依赖来「顺便调度」。
-
-## 输入
-- 调度配置 / API 触发参数
-- 库中任务状态与上游完成标记
-
-## 输出
-- `job_*` 状态表
-- 对各模块任务入口的引用调用
+1. `daily`（CORE 行情→process→CORE DQ）— **失败则中止本轮**
+2. `security_master --p0`（TOP100 / SECTOR_LEADERS 日快照）
+3. ALPHA：`news_official` / `news_policy` / `valuation`
+4. `data_quality --scope ALPHA`（仅报告，不写 gate）
+5. `ops_monitor.notify` 汇总本轮 failed 并落 `ops_alert`
 
 ## 运行
-- 待定：调度进程 / worker
+
+```bash
+cd backend
+python main.py migrate
+# 非开市日快速跳过 exit 0（开发机冒烟优先用周末 as-of，避免误触 TOP100 日更）
+python main.py schedule --once --as-of 2026-07-26
+# 开市日完整一轮（会拉当日 CORE/ALPHA）
+python main.py schedule --once
+# 强制（调试）
+python main.py schedule --once --force --as-of 2026-07-25
+# 进程内定时（stdlib）
+python main.py schedule --at 18:30 --universe TOP100
+```
+
+## 边界
+- 做：顺序触发；记录步骤状态；CORE 失败中止；ALPHA 失败继续。
+- 不做：Airflow；业务计算；替代各模块 CLI。
 
 ## 不变量
-- 消息与调用只含引用 ID 与标量参数
-- 业务模块禁止私建平行调度器绕过本模块（主链路）
+- 跨模块只传 `job_id` 与标量参数
+- CORE 先于 ALPHA

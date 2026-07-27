@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`018`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`019`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -25,6 +25,7 @@
 | `016_alpha_relation.sql` | `raw_stock_relation`（个股关系边 / 图谱） |
 | `017_research_lab.sql` | `research_run`、`research_factor_value`（基线因子） |
 | `018_phase3_pit_correctness.sql` | `processed_fund_snapshot`（基本面 PIT 区间） |
+| `019_ops_schedule.sql` | `ops_alert`（编排告警） |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

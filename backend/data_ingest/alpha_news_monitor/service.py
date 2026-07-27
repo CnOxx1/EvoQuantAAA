@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from data_ingest.alpha_news_monitor.dedupe import dedupe_news_records, map_symbols_by_name
 from data_ingest.alpha_news_monitor.models import VALID_KINDS, FetchRequest
-from data_ingest.alpha_news_monitor.repository import NewsRepository
+from data_ingest.alpha_news_monitor.repository import NewsRepository, lookback_watermark
 from data_ingest.alpha_news_monitor.sources import get_source
 from data_ingest.alpha_news_monitor.sources.base import FetchResult, NewsSource
 from data_ingest.alpha_news_monitor.sources.mock import MockNewsSource
@@ -22,6 +23,7 @@ _WATERMARK_KINDS = frozenset(
         "news_policy",
     }
 )
+_LOOKBACK_HOURS = 24
 
 
 @dataclass
@@ -55,15 +57,17 @@ class NewsIngestService:
 
         active = self.source
         watch_key = self._watch_key(request)
-        # channel 在 fetch 前按 kind 预设，便于水位读写
         channel = {
             "news_official": "official",
             "news_forum": "forum",
             "news_policy": "policy",
         }.get(request.kind, getattr(active, "channel", "eastmoney"))
+        stored_wm = None
         since = None
         if request.kind in _WATERMARK_KINDS:
-            since = self.repo.get_watermark(active.source, channel, watch_key)
+            stored_wm = self.repo.get_watermark(active.source, channel, watch_key)
+            # 回看 24h，配合幂等 UPSERT 吸收源端补发
+            since = lookback_watermark(stored_wm, hours=_LOOKBACK_HOURS)
 
         batch = self.batches.create(
             ingest_module=MODULE_NAME,
@@ -74,20 +78,29 @@ class NewsIngestService:
                 "source": active.source,
                 "channel": channel,
                 "watch_key": watch_key,
+                "watermark": stored_wm,
                 "since": since,
+                "lookback_hours": _LOOKBACK_HOURS,
                 "media_filters": request.media_filters,
                 "forum_top_n": request.forum_top_n,
+                "symbol_map": request.symbol_map,
             },
         )
         try:
             fetch_result, active = self._fetch(active, request, since=since)
-            stats = self.repo.upsert_many(batch.batch_id, fetch_result.records)
-            new_wm = since
+            records = list(fetch_result.records)
+            if request.symbol_map:
+                records = map_symbols_by_name(
+                    records, name_to_symbol=self.repo.load_listing_name_map()
+                )
+            recent = self.repo.load_recent_title_keys(hours=_LOOKBACK_HOURS)
+            records = dedupe_news_records(records, recent_keys=recent)
+            stats = self.repo.upsert_many(batch.batch_id, records)
+            new_wm = stored_wm
             if request.kind in _WATERMARK_KINDS:
-                # fetch 可能改写 source.channel
                 channel = getattr(active, "channel", channel) or channel
                 if fetch_result.max_publish_time and (
-                    since is None or fetch_result.max_publish_time > since
+                    stored_wm is None or fetch_result.max_publish_time > stored_wm
                 ):
                     new_wm = fetch_result.max_publish_time
                     self.repo.set_watermark(
@@ -111,7 +124,7 @@ class NewsIngestService:
                 fetched=0,
                 inserted=0,
                 updated=0,
-                watermark=since,
+                watermark=stored_wm,
                 message=str(exc),
             )
 
@@ -120,19 +133,16 @@ class NewsIngestService:
     ) -> tuple[FetchResult, NewsSource]:
         try:
             return source.fetch(request, since=since), source
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             if not self.fallback_mock_on_error or isinstance(source, MockNewsSource):
                 raise
+            logger.warning("news source failed, fallback mock: %s", exc)
             mock = MockNewsSource()
             return mock.fetch(request, since=since), mock
 
-    @staticmethod
-    def _watch_key(request: FetchRequest) -> str:
+    def _watch_key(self, request: FetchRequest) -> str:
         if request.kind == "news_watchlist":
-            return "watch:" + ",".join(sorted(request.symbols or []))
-        if (
-            request.kind in {"news_official", "news_forum", "news_policy"}
-            and request.media_filters
-        ):
-            return "media:" + ",".join(sorted(m.lower() for m in request.media_filters))
+            return "watch:" + ",".join(sorted(request.symbols))
+        if request.media_filters:
+            return "media:" + ",".join(sorted(request.media_filters))
         return ""
