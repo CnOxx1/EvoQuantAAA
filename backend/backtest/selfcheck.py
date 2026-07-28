@@ -66,6 +66,43 @@ def _run_mock_cases() -> None:
     assert sells_d2, "T+1 次日应能卖出 AAA"
     assert all(t["symbol"] == "AAA" for t in sells_d2)
 
+    # 冲击成本：有 ADV 时买入价应高于 flat
+    bars_imp = [
+        {
+            "symbol": "AAA",
+            "trade_date": "2026-07-01",
+            "close": 10.0,
+            "adj_close": 10.0,
+            "can_buy": 1,
+            "can_sell": 1,
+            "adv": 1_000_000.0,
+        }
+    ]
+    out_flat = run_target_weights(
+        bars=bars_imp,
+        index_bars=[],
+        cost=_cost(),
+        initial_cash=100_000.0,
+        target_weights={"2026-07-01": {"AAA": 1.0}},
+    )
+    out_imp = run_target_weights(
+        bars=bars_imp,
+        index_bars=[],
+        cost=CostParams(
+            version="mock_imp",
+            commission_rate=0.0,
+            min_commission=0.0,
+            stamp_tax_rate=0.0,
+            slippage_rate=0.0,
+            lot_size=100,
+            impact_model="sqrt_adv",
+            impact_coef=0.1,
+        ),
+        initial_cash=100_000.0,
+        target_weights={"2026-07-01": {"AAA": 1.0}},
+    )
+    assert out_imp.trades[0]["price"] > out_flat.trades[0]["price"]
+
     # 同日买入不可卖（目标先买后同日切仓）
     bars_same = [
         _bar("AAA", "2026-07-01", 10.0),

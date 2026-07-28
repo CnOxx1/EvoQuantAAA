@@ -118,7 +118,7 @@
 | ledger_lot | oltp | ledger | execution, ops_monitor | lot_id | T+1 FIFO；含 `strategy_version` |
 | ledger_sleeve_position | oltp | ledger | execution | (account_id, strategy_version, symbol) | 策略 sleeve 持仓隔离；`''` 为 031 回填的历史仓 |
 | api_audit_log | oltp | api_gateway | ops_monitor | audit_id | 网关写操作审计 |
-| cost_params | ref_data | migrations 种子 | backtest, execution, ledger | version | 统一费用口径 |
+| cost_params | ref_data | migrations 种子 | backtest, execution, ledger | version | 统一费用；`v2_sqrt_impact` 含 sqrt ADV 冲击 |
 | backtest_run | oltp | backtest | frontend/backtest_view, research_lab, ops_monitor | run_id | running→committed/failed |
 | backtest_nav | oltp | backtest | frontend/backtest_view | (run_id, trade_date) | 日净值与基准 |
 | backtest_trade | oltp | backtest | frontend/backtest_view | run_id | 成交假设 |

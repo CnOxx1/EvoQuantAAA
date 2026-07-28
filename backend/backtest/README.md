@@ -7,7 +7,8 @@
 
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
-| 费用参数 | `cost_params` | 迁移种子 `v1_ashare_default` |
+| 费用参数 | `cost_params` | 迁移种子 `v1_ashare_default` / `v2_sqrt_impact` |
+
 | 回测运行 | `backtest_run` | 开始 running → committed/failed；`max_drawdown`/`total_return`/日期窗供晋升质量门 |
 | 日净值 | `backtest_nav` | 每日 cash/市值/基准 |
 | 成交假设 | `backtest_trade` | 建仓/调仓成交 |
@@ -29,6 +30,7 @@
 - **整手**：`lot_size`（默认 100）向下取整
 - **定价**：成交与市值优先**未复权 `close`**（缺则 `adj_close`），与 live 对齐
 - **费用**：买入佣金；卖出佣金 + **印花税**；滑点计入成交价
+- **冲击（18b）**：`cost_params.impact_model=sqrt_adv` 时附加 `coef * sqrt(名义/ADV)`；ADV 来自滚动 `amount`；缺 ADV 退回仅基滑点；版本 `v2_sqrt_impact`
 - **pending**：调仓日写入目标；对齐后清空，避免非调仓日微扰
 - 现金不足按比例缩量买入，不允许透支
 
@@ -51,8 +53,9 @@ python main.py backtest --strategy EW_REBALANCE --rebalance-days 20 --universe T
 # 因子 → 回测（须先 research 落库）
 python main.py research --factor MOM_20 --universe TOP100 --start 2026-06-01 --end 2026-07-23
 python main.py backtest --strategy FACTOR_TOP_N --factor MOM_20 --top-n 20 --rebalance-days 20 --universe TOP100 --start 2026-06-01 --end 2026-07-23
+python main.py backtest --strategy EW_HOLD --symbol 600000 --start 2026-07-01 --end 2026-07-23 --cost-version v2_sqrt_impact
 python -m backtest.selfcheck
-python -m pytest tests/test_backtest_engine.py -q
+python -m pytest tests/test_backtest_engine.py tests/test_impact_cost.py -q
 ```
 
 ## 不变量

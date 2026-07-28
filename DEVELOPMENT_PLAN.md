@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–17 已完成**；**研究证据包 + 阶段 18a（行业·ADV 风控）已落地**（迁移 `001`–`034`）。  
-**下一优先**：冲击成本模型 / console 写操作 / 更长窗 OOS 证据固化。  
+**当前进度**：阶段 **1–17**、**18a（行业·ADV）**、**18b（冲击成本）**、研究证据包已落地（迁移 `001`–`035`）。  
+**下一优先**：console 写操作 / 更长窗 OOS 证据固化 / 实盘柜台（更后）。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `034`（risk ADV/industry），**新迁移从 `035` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `035`（impact cost），**新迁移从 `036` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -69,9 +69,12 @@
 | 未成交残差 | `execution_pending` 下日续撮（迁移 `033`） |
 | 行业·ADV 风控 | `risk_limits` v2 + ADV/行业硬规则（迁移 `034`） |
 | 研究证据包 | `research --evidence`（年切 OOS + soft 结论；可选回测） |
+| 冲击成本 | `cost_params` v2_sqrt_impact；回测/纸面共用（迁移 `035`） |
 | E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
 
-> **阶段 18a（2026-07-28）**：风控 ADV 参与度与行业集中度——`risk_limits` 扩展 + 种子 `v2_adv_industry`；审核时点时补行业/20 日 ADV；账户合并同验。研究证据包并行落地（非独立阶段号）。下一优先：冲击成本 / console 写。
+> **阶段 18b（2026-07-28）**：成交冲击——`cost_params` 扩展 `impact_model/coef/adv_lookback`；种子 `v2_sqrt_impact`；`shared/impact.py` 纯函数；回测与纸面执行按名义/ADV 附加滑点。下一优先：console 写。
+>
+> **阶段 18a（2026-07-28）**：风控 ADV 参与度与行业集中度——`risk_limits` 扩展 + 种子 `v2_adv_industry`；审核时点时补行业/20 日 ADV；账户合并同验。研究证据包并行落地（非独立阶段号）。
 >
 > **阶段 17（2026-07-27）**：未成交残差 pending——意图−成交落 `execution_pending`；`resume-pending` 续撮；schedule 先续撮再跑 approved；新调仓 supersede 旧 open。
 >
@@ -451,6 +454,20 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：证据包 CLI 可用；相关单测绿；research_lab README 同步。
 
+---
+
+## 阶段 18b · 冲击成本（backtest + execution）
+
+### 任务 18b.1 sqrt(ADV) 冲击定价
+
+**要求**：
+1. 迁移 `035`：`cost_params` 增加 `impact_model` / `impact_coef` / `adv_lookback_days`；种子 `v2_sqrt_impact`（`v1_ashare_default` 保持 flat）
+2. `shared/impact.py`：`effective_slippage_rate` / `slipped_fill_price` / 滚动 ADV；缺 ADV 退回基滑点
+3. 回测引擎与纸面 `fill_price` 共用公式；`--cost-version v2_sqrt_impact`
+4. pytest / selfcheck / README / 任务书 / 根 changelog 同步
+
+**验收**：迁移 `035`；冲击单测绿；pytest 全绿；文档同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -486,3 +503,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 17 | 17.1 execution pending | 残差落库 / 续撮 / schedule 接入 |
 | 18a | 18a.1 ADV/行业风控 | `v2_adv_industry` 限额 + 硬规则 |
 | 18a | 18a.2 研究证据包 | `research --evidence` |
+| 18b | 18b.1 sqrt ADV 冲击 | `v2_sqrt_impact`；回测/执行共用 |

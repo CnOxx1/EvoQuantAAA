@@ -65,13 +65,27 @@ class BacktestService:
                 )
 
         # 只回测有 processed 行情的子集（样本期常见）
+        cost = self.repo.load_cost(request.cost_version)
+        need_adv = cost.needs_adv
+        lookback = max(1, int(cost.adv_lookback_days or 20))
+        bar_start = start
+        if need_adv:
+            # 日历预热，供滚动 ADV
+            bar_start = (
+                date.fromisoformat(start) - timedelta(days=lookback * 3)
+            ).isoformat()
+
         bars = self.repo.load_equity_bars(
-            start=start,
+            start=bar_start,
             end=end,
             symbols=symbols,
             factor_type=request.factor_type,
+            include_amount=need_adv,
         )
-        available = sorted({str(b["symbol"]) for b in bars})
+        available = sorted({str(b["symbol"]) for b in bars if str(b["trade_date"])[:10] >= start})
+        if not available:
+            # 兼容：预热窗有数据但样本窗无
+            available = sorted({str(b["symbol"]) for b in bars})
         if not available:
             return BacktestResult(
                 status="failed",
@@ -81,9 +95,15 @@ class BacktestService:
                 end=end,
                 message="Universe 内无 processed_equity_bar_1d，请先扩行情并 data_process",
             )
-        bars = [b for b in bars if str(b["symbol"]) in set(available)]
+        avail_set = set(available)
+        bars = [b for b in bars if str(b["symbol"]) in avail_set]
+        if need_adv:
+            from shared.impact import attach_adv_to_bars
 
-        cost = self.repo.load_cost(request.cost_version)
+            bars = attach_adv_to_bars(bars, lookback=lookback)
+        # 引擎只跑样本窗
+        bars = [b for b in bars if start <= str(b["trade_date"])[:10] <= end]
+
         index_bars = self.repo.load_index_bars(
             start=start, end=end, index_symbol=request.benchmark_index
         )
@@ -108,6 +128,8 @@ class BacktestService:
                     "research_factor": request.research_factor,
                     "top_n": request.top_n,
                     "rebalance_days": request.rebalance_days,
+                    "impact_model": cost.impact_model,
+                    "adv_attached": need_adv,
                 },
                 "created_at": created,
             }

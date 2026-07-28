@@ -23,6 +23,18 @@ def _run_mock() -> None:
     assert abs(fill_price("SELL", 10.0, cost) - 9.995) < 1e-9
     assert commission(1000, cost) == 5.0  # min
 
+    cost_imp = CostSnapshot(
+        version="t2",
+        commission_rate=0.0,
+        min_commission=0.0,
+        stamp_tax_rate=0.0,
+        slippage_rate=0.0,
+        impact_model="sqrt_adv",
+        impact_coef=0.1,
+    )
+    # notional=10*1000=1e4, adv=1e6, part=0.01 → slip=0.01
+    assert abs(fill_price("BUY", 10.0, cost_imp, qty=1000, adv=1_000_000) - 10.1) < 1e-9
+
     intents = build_paper_intents(
         positions=[
             {

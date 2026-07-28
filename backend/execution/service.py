@@ -256,6 +256,25 @@ class ExecutionService:
                     }
                 )
 
+        if cost.needs_adv and trade_date:
+            syms = sorted(
+                {
+                    str(p["symbol"])
+                    for p in positions
+                    if p.get("symbol")
+                }
+            )
+            adv_map = self.repo.load_adv_map(
+                symbols=syms,
+                as_of=trade_date,
+                lookback_days=cost.adv_lookback_days,
+                factor_type=factor_type,
+            )
+            for p in positions:
+                sym = str(p.get("symbol") or "")
+                if sym in adv_map:
+                    p["adv"] = adv_map[sym]
+
         intents = build_paper_intents(
             positions=positions,
             current_shares=current_shares,
@@ -286,6 +305,8 @@ class ExecutionService:
             "ledger_position_count": len(current_shares),
             "factor_type": factor_type,
             "pricing": "unadjusted_close",
+            "cost_version": request.cost_version,
+            "impact_model": getattr(cost, "impact_model", "flat"),
             "cash_before": cash,
             "run_kind": "portfolio",
             "pending_residual_count": len(residuals),
@@ -485,6 +506,16 @@ class ExecutionService:
         bars = self.repo.load_bars_as_of(
             as_of=as_of, symbols=symbols, factor_type=factor_type
         )
+        if getattr(cost, "needs_adv", False):
+            adv_map = self.repo.load_adv_map(
+                symbols=symbols,
+                as_of=as_of,
+                lookback_days=getattr(cost, "adv_lookback_days", 20),
+                factor_type=factor_type,
+            )
+            for sym, b in bars.items():
+                if sym in adv_map:
+                    b["adv"] = adv_map[sym]
         sellable = self.repo.load_sellable_shares(
             account_id, as_of, strategy_version=strategy_version
         )

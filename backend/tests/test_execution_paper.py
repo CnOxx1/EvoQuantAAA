@@ -16,6 +16,21 @@ def test_fill_price_slippage():
     assert abs(fill_price("SELL", 100.0, cost) - 99.9) < 1e-9
 
 
+def test_fill_price_sqrt_impact():
+    cost = CostSnapshot(
+        version="t",
+        commission_rate=0.0,
+        min_commission=0.0,
+        stamp_tax_rate=0.0,
+        slippage_rate=0.0,
+        impact_model="sqrt_adv",
+        impact_coef=0.1,
+    )
+    # notional=100*1000=1e5, adv=1e7, part=0.01, slip=0.01
+    px = fill_price("BUY", 100.0, cost, qty=1000, adv=10_000_000)
+    assert abs(px - 101.0) < 1e-9
+
+
 def test_intents_from_flat_book():
     intents = build_paper_intents(
         positions=[

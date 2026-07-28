@@ -2628,7 +2628,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="从 Universe 快照取标的（无 --symbol 时使用，默认不强制）",
     )
     p_bt.add_argument("--factor-type", default="qfq", choices=["qfq", "hfq"])
-    p_bt.add_argument("--cost-version", default="v1_ashare_default")
+    p_bt.add_argument(
+        "--cost-version",
+        default="v1_ashare_default",
+        help="cost_params.version（v1_ashare_default 或 v2_sqrt_impact）",
+    )
     p_bt.add_argument("--benchmark", default="000300")
     p_bt.add_argument("--cash", type=float, default=1_000_000.0)
     p_bt.add_argument(

@@ -13,7 +13,8 @@ class ExecutionRepository:
             row = conn.execute(
                 """
                 SELECT version, commission_rate, min_commission, stamp_tax_rate,
-                       slippage_rate, lot_size
+                       slippage_rate, lot_size,
+                       impact_model, impact_coef, adv_lookback_days
                 FROM cost_params WHERE version=?
                 """,
                 (version,),
@@ -27,6 +28,9 @@ class ExecutionRepository:
             stamp_tax_rate=float(row["stamp_tax_rate"]),
             slippage_rate=float(row["slippage_rate"]),
             lot_size=int(row["lot_size"] or 100),
+            impact_model=str(row["impact_model"] or "flat"),
+            impact_coef=float(row["impact_coef"] or 0),
+            adv_lookback_days=int(row["adv_lookback_days"] or 20),
         )
 
     def get_portfolio(self, portfolio_id: str) -> dict[str, Any] | None:
@@ -210,6 +214,7 @@ class ExecutionRepository:
         symbols: list[str],
         factor_type: str = "qfq",
         lookback_days: int = 60,
+        include_amount: bool = False,
     ) -> dict[str, dict[str, Any]]:
         if not symbols:
             return {}
@@ -217,8 +222,9 @@ class ExecutionRepository:
 
         start = (date.fromisoformat(as_of[:10]) - timedelta(days=lookback_days)).isoformat()
         ph = ",".join("?" * len(symbols))
+        amt_col = ", amount" if include_amount else ""
         sql = f"""
-            SELECT symbol, trade_date, close, adj_close, can_buy, can_sell
+            SELECT symbol, trade_date, close, adj_close, can_buy, can_sell{amt_col}
             FROM processed_equity_bar_1d
             WHERE factor_type=? AND trade_date>=? AND trade_date<=?
               AND symbol IN ({ph})
@@ -235,6 +241,51 @@ class ExecutionRepository:
                 continue
             out[sym] = dict(r)
         return out
+
+    def load_adv_map(
+        self,
+        *,
+        symbols: list[str],
+        as_of: str,
+        lookback_days: int = 20,
+        factor_type: str = "qfq",
+    ) -> dict[str, float]:
+        """as_of 及以前 lookback 个交易日的平均成交额。"""
+        if not symbols:
+            return {}
+        lookback = max(1, int(lookback_days))
+        ph = ",".join("?" * len(symbols))
+        with get_conn() as conn:
+            date_rows = conn.execute(
+                """
+                SELECT DISTINCT trade_date FROM processed_equity_bar_1d
+                WHERE trade_date <= ? AND factor_type=?
+                ORDER BY trade_date DESC
+                LIMIT ?
+                """,
+                (as_of[:10], factor_type, lookback),
+            ).fetchall()
+            dates = [str(r["trade_date"])[:10] for r in date_rows]
+            if not dates:
+                return {}
+            date_ph = ",".join("?" * len(dates))
+            rows = conn.execute(
+                f"""
+                SELECT symbol, AVG(amount) AS adv
+                FROM processed_equity_bar_1d
+                WHERE factor_type=?
+                  AND trade_date IN ({date_ph})
+                  AND symbol IN ({ph})
+                  AND amount IS NOT NULL AND amount > 0
+                GROUP BY symbol
+                """,
+                (factor_type, *dates, *symbols),
+            ).fetchall()
+        return {
+            str(r["symbol"]): float(r["adv"])
+            for r in rows
+            if r["adv"] is not None
+        }
 
     def list_approved_portfolios(
         self, *, as_of: str | None = None, account_id: str | None = None, limit: int = 50

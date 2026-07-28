@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backtest.models import CostParams
+from shared.impact import slipped_fill_price
 
 
 @dataclass
@@ -29,6 +30,31 @@ def _trade_px(bar: dict[str, Any] | None) -> float | None:
         return None
     v = float(px)
     return v if v > 0 else None
+
+
+def _slip_fill_px(
+    *,
+    side: str,
+    mid: float,
+    qty: float,
+    cost: CostParams,
+    bar: dict[str, Any] | None,
+) -> float:
+    adv = None
+    if bar is not None and bar.get("adv") is not None:
+        try:
+            adv = float(bar["adv"])
+        except (TypeError, ValueError):
+            adv = None
+    return slipped_fill_price(
+        side=side,
+        mid=mid,
+        base_slippage=cost.slippage_rate,
+        impact_model=getattr(cost, "impact_model", "flat"),
+        impact_coef=getattr(cost, "impact_coef", 0.0),
+        qty=qty,
+        adv=adv,
+    )
 
 
 def _commission(amount: float, cost: CostParams) -> float:
@@ -199,7 +225,9 @@ def run_target_weights(
                 px_ref = _trade_px(b)
                 if px_ref is None:
                     continue
-                px = px_ref * (1.0 - cost.slippage_rate)
+                px = _slip_fill_px(
+                    side="SELL", mid=px_ref, qty=sh, cost=cost, bar=b
+                )
                 amount = sh * px
                 fee_c = _commission(amount, cost)
                 fee_stamp = amount * cost.stamp_tax_rate
@@ -227,7 +255,7 @@ def run_target_weights(
             # ---- 买入（按目标差额；现金不足按比例缩量）----
             mv1 = _mark_to_market(positions, day_bars)
             nav1 = cash + mv1
-            buy_orders: list[tuple[str, int, float]] = []  # sym, shares, px
+            buy_orders: list[tuple[str, int, float]] = []  # sym, shares, mid
             for sym in sorted(pending):
                 tw = float(pending.get(sym, 0.0))
                 if tw <= 0:
@@ -238,27 +266,46 @@ def run_target_weights(
                     continue
                 if int(b.get("can_buy") or 0) != 1:
                     continue
-                px = px_ref * (1.0 + cost.slippage_rate)
+                # 整手用 mid；冲击在成交时按实际股数重算
+                px_est = _slip_fill_px(
+                    side="BUY", mid=px_ref, qty=0, cost=cost, bar=b
+                )
                 cur = float(positions.get(sym, 0.0))
-                want = _lot_shares(nav1 * tw, px, cost.lot_size)
+                want = _lot_shares(nav1 * tw, px_est, cost.lot_size)
                 need = want - cur
                 need = int(need // cost.lot_size) * cost.lot_size
                 if need > 0:
-                    buy_orders.append((sym, need, px))
+                    buy_orders.append((sym, need, px_ref))
 
             if buy_orders:
                 gross = 0.0
-                for sym, sh, px in buy_orders:
+                priced: list[tuple[str, int, float, float]] = []
+                for sym, sh, mid in buy_orders:
+                    px = _slip_fill_px(
+                        side="BUY",
+                        mid=mid,
+                        qty=sh,
+                        cost=cost,
+                        bar=day_bars.get(sym),
+                    )
                     amt = sh * px
                     gross += amt + _commission(amt, cost)
+                    priced.append((sym, sh, mid, px))
                 scale = 1.0
                 if gross > cash and gross > 0:
                     scale = max(0.0, cash / gross)
 
-                for sym, sh, px in buy_orders:
+                for sym, sh, mid, px0 in priced:
                     adj_sh = int((sh * scale) // cost.lot_size) * cost.lot_size
                     if adj_sh <= 0:
                         continue
+                    px = _slip_fill_px(
+                        side="BUY",
+                        mid=mid,
+                        qty=adj_sh,
+                        cost=cost,
+                        bar=day_bars.get(sym),
+                    )
                     amount = adj_sh * px
                     fee = _commission(amount, cost)
                     if amount + fee > cash + 1e-9:
@@ -268,6 +315,13 @@ def run_target_weights(
                         )
                         if adj_sh <= 0:
                             continue
+                        px = _slip_fill_px(
+                            side="BUY",
+                            mid=mid,
+                            qty=adj_sh,
+                            cost=cost,
+                            bar=day_bars.get(sym),
+                        )
                         amount = adj_sh * px
                         fee = _commission(amount, cost)
                     if amount + fee > cash + 1e-9:

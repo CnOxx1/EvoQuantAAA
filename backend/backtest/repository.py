@@ -17,7 +17,8 @@ class BacktestRepository:
             row = conn.execute(
                 """
                 SELECT version, commission_rate, min_commission, stamp_tax_rate,
-                       slippage_rate, lot_size
+                       slippage_rate, lot_size,
+                       impact_model, impact_coef, adv_lookback_days
                 FROM cost_params WHERE version=?
                 """,
                 (version,),
@@ -31,6 +32,9 @@ class BacktestRepository:
             stamp_tax_rate=float(row["stamp_tax_rate"]),
             slippage_rate=float(row["slippage_rate"]),
             lot_size=int(row["lot_size"] or 100),
+            impact_model=str(row["impact_model"] or "flat"),
+            impact_coef=float(row["impact_coef"] or 0),
+            adv_lookback_days=int(row["adv_lookback_days"] or 20),
         )
 
     def require_dq_passed(
@@ -88,12 +92,15 @@ class BacktestRepository:
         end: str,
         symbols: list[str],
         factor_type: str,
+        include_amount: bool = False,
     ) -> list[dict[str, Any]]:
         if not symbols:
             return []
+        amt_col = ", amount" if include_amount else ""
         sql = f"""
             SELECT symbol, trade_date, adj_open, adj_close, close,
                    can_buy, can_sell, is_suspended, is_limit_up, is_limit_down
+                   {amt_col}
             FROM processed_equity_bar_1d
             WHERE factor_type=? AND trade_date>=? AND trade_date<=?
               AND symbol IN ({_ph(len(symbols))})

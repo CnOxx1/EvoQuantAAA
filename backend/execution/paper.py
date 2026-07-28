@@ -5,20 +5,30 @@ from __future__ import annotations
 from typing import Any
 
 from execution.models import CostSnapshot
+from shared.impact import slipped_fill_price
 
 
 def commission(amount: float, cost: CostSnapshot) -> float:
     return max(abs(amount) * cost.commission_rate, cost.min_commission)
 
 
-def fill_price(side: str, mid: float, cost: CostSnapshot) -> float:
-    if mid <= 0:
-        raise ValueError("price 必须 > 0")
-    if side == "BUY":
-        return mid * (1.0 + cost.slippage_rate)
-    if side == "SELL":
-        return mid * (1.0 - cost.slippage_rate)
-    raise ValueError(f"未知 side: {side}")
+def fill_price(
+    side: str,
+    mid: float,
+    cost: CostSnapshot,
+    *,
+    qty: float | None = None,
+    adv: float | None = None,
+) -> float:
+    return slipped_fill_price(
+        side=side,
+        mid=mid,
+        base_slippage=cost.slippage_rate,
+        impact_model=getattr(cost, "impact_model", "flat"),
+        impact_coef=getattr(cost, "impact_coef", 0.0),
+        qty=qty,
+        adv=adv,
+    )
 
 
 def apply_sellable_limits(
@@ -82,6 +92,11 @@ def build_paper_intents(
         str(p["symbol"]): int(p["can_sell"]) if p.get("can_sell") is not None else 1
         for p in positions
     }
+    adv_by = {
+        str(p["symbol"]): float(p["adv"])
+        for p in positions
+        if p.get("adv") is not None
+    }
 
     for sym in symbols:
         want = float(want_by.get(sym, 0.0))
@@ -111,6 +126,7 @@ def build_paper_intents(
                         "reject": True,
                         "reason": "cannot_buy",
                         "mid_price": px,
+                        "adv": adv_by.get(sym),
                     }
                 )
                 continue
@@ -121,6 +137,7 @@ def build_paper_intents(
                     "qty": delta,
                     "reject": False,
                     "mid_price": px,
+                    "adv": adv_by.get(sym),
                 }
             )
         else:
@@ -133,6 +150,7 @@ def build_paper_intents(
                         "reject": True,
                         "reason": "cannot_sell",
                         "mid_price": px,
+                        "adv": adv_by.get(sym),
                     }
                 )
                 continue
@@ -143,6 +161,7 @@ def build_paper_intents(
                     "qty": -delta,
                     "reject": False,
                     "mid_price": px,
+                    "adv": adv_by.get(sym),
                 }
             )
     return apply_sellable_limits(intents, sellable_shares=sellable_shares)
@@ -189,7 +208,12 @@ def simulate_paper_fills(
             )
             continue
         mid = float(it["mid_price"])
-        px = fill_price(side, mid, cost)
+        adv = it.get("adv")
+        try:
+            adv_f = float(adv) if adv is not None else None
+        except (TypeError, ValueError):
+            adv_f = None
+        px = fill_price(side, mid, cost, qty=qty, adv=adv_f)
 
         if side == "SELL":
             amount = qty * px
@@ -225,12 +249,13 @@ def simulate_paper_fills(
 
         # BUY
         if cash_left is not None:
-            # 最大可买整手：fill_price 已含滑点；佣金用迭代压到可负担
-            unit = px
+            # 用冲击后单价估算可买整手；缩量后重算价
+            unit = fill_price(side, mid, cost, qty=qty, adv=adv_f)
             max_by_cash = int(cash_left / unit + 1e-9) if unit > 0 else 0
             max_lot = (max_by_cash // lot) * lot
             while max_lot >= lot:
-                amount_try = max_lot * unit
+                unit_try = fill_price(side, mid, cost, qty=float(max_lot), adv=adv_f)
+                amount_try = max_lot * unit_try
                 comm_try = commission(amount_try, cost)
                 if amount_try + comm_try <= cash_left + 1e-9:
                     break
@@ -249,6 +274,7 @@ def simulate_paper_fills(
                     )
                     continue
                 qty = float(max_lot)
+                px = fill_price(side, mid, cost, qty=qty, adv=adv_f)
 
         amount = qty * px
         slip = abs(px - mid) * qty
@@ -368,6 +394,7 @@ def build_pending_intents(
             )
             continue
         px_f = float(px)
+        adv = b.get("adv")
         if side == "BUY":
             if int(b.get("can_buy") or 0) != 1:
                 intents.append(
@@ -378,6 +405,7 @@ def build_pending_intents(
                         "reject": True,
                         "reason": "cannot_buy",
                         "mid_price": px_f,
+                        "adv": adv,
                     }
                 )
                 continue
@@ -388,6 +416,7 @@ def build_pending_intents(
                     "qty": qty,
                     "reject": False,
                     "mid_price": px_f,
+                    "adv": adv,
                 }
             )
         else:
@@ -400,6 +429,7 @@ def build_pending_intents(
                         "reject": True,
                         "reason": "cannot_sell",
                         "mid_price": px_f,
+                        "adv": adv,
                     }
                 )
                 continue
@@ -410,6 +440,7 @@ def build_pending_intents(
                     "qty": qty,
                     "reject": False,
                     "mid_price": px_f,
+                    "adv": adv,
                 }
             )
     return apply_sellable_limits(intents, sellable_shares=sellable_shares)

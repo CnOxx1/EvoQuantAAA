@@ -217,3 +217,38 @@ def test_factor_top_n_uses_previous_day_factor():
     assert "2026-07-02" in targets
     assert list(targets["2026-07-02"].keys()) == ["A"]
     assert "C" not in targets["2026-07-02"]
+
+
+def test_impact_worsens_buy_price():
+    cost_flat = _cost(slippage_rate=0.0)
+    cost_imp = _cost(
+        slippage_rate=0.0, impact_model="sqrt_adv", impact_coef=0.1
+    )
+    bars = [
+        {
+            "symbol": "A",
+            "trade_date": "2026-07-01",
+            "close": 10.0,
+            "adj_close": 10.0,
+            "can_buy": 1,
+            "can_sell": 1,
+            "adv": 1_000_000.0,
+        }
+    ]
+    out_flat = run_target_weights(
+        bars=bars,
+        index_bars=[],
+        target_weights={"2026-07-01": {"A": 1.0}},
+        cost=cost_flat,
+        initial_cash=100_000.0,
+    )
+    out_imp = run_target_weights(
+        bars=bars,
+        index_bars=[],
+        target_weights={"2026-07-01": {"A": 1.0}},
+        cost=cost_imp,
+        initial_cash=100_000.0,
+    )
+    buy_flat = next(t for t in out_flat.trades if t["side"] == "BUY")
+    buy_imp = next(t for t in out_imp.trades if t["side"] == "BUY")
+    assert buy_imp["price"] > buy_flat["price"]

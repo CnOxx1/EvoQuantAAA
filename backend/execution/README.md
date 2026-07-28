@@ -39,6 +39,7 @@
 - 现金账户级；先卖后买；`insufficient_cash` / `clamped_cash`
 - SELL：T+1 lot + `can_sell`
 - 成交价优先未复权 `close`
+- **冲击（18b）**：与回测共用 `cost_params`；`v2_sqrt_impact` 启用 `slip + coef*sqrt(名义/ADV)`；审核/续撮时点时补 ADV；`slippage_cost` 含冲击差额
 - **残差（阶段 17）**：REJECTED / 未成交部分写入 `execution_pending`；新调仓执行前 supersede 同 sleeve 旧 open，再写入本轮残差
 - **续撮**：`resume-pending` 按 sleeve 用当日行情/可卖/现金再试；同日同 sleeve 幂等；`run_kind=pending_resume`
 - CLI：committed 且 `fill_count>0` 立即 ledger post；已有 posting 禁止 `--force`

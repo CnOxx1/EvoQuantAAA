@@ -53,7 +53,7 @@
 
 ## 2. 当前完成度
 
-**状态（2026-07-28）**：阶段 **1–17** + **18a（行业·ADV 风控）** + **研究证据包** 已落地；迁移 **`001`–`034`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；**未接**真实柜台。
+**状态（2026-07-28）**：阶段 **1–17** + **18a（行业·ADV）** + **18b（冲击成本）** + **研究证据包** 已落地；迁移 **`001`–`035`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；**未接**真实柜台。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
@@ -61,14 +61,14 @@
 | ALPHA 取数 | ✅ | 可插拔；失败不挡 CORE |
 | Universe | ✅ | TOP100 / SECTOR_LEADERS / 指数成分等日快照 |
 | 研究因子 + IC + 证据包 | ✅ | MOM / VAL / FLOW / TECH_*；`research --evidence` 年切 OOS |
-| 回测引擎 | ✅ | EW_* / FACTOR_TOP_N；FIFO lot T+1；`close` 成交 |
+| 回测引擎 | ✅ | EW_* / FACTOR_TOP_N；FIFO lot T+1；`close` 成交；**可选 sqrt ADV 冲击** |
 | 策略晋升 + 质量门 | ✅ | DRAFT→…→LIVE；IC/DD/样本窗（`032`） |
 | 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；Kill Switch；账户合并敞口；**v2 行业/ADV** |
-| 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；现金约束；执行后可即时过账；**残差 pending 续撮** |
+| 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；冲击与回测同口径；残差 pending 续撮 |
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
 | API + E2E + console | ✅ | `/v1`；`python main.py e2e`；只读台 |
 | 实盘柜台 | ❌ | 仅 paper adapter |
-| 冲击成本 / console 写 | ⏳ | 下一优先 |
+| console 写操作 | ⏳ | 下一优先 |
 
 **开发机约束**：只做短窗冒烟（几天～约 1 个月、TOP100 或单票）。**禁止** ALL_LISTED（6000+）长窗 bulk、禁止本机长历史回填。
 
@@ -80,11 +80,11 @@
 EvoQuantAAA
 ├── README.md                      # 本文件（入口手册）
 ├── ARCHITECTURE_PRINCIPLES.md     # 强制架构与合入清单
-├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 18a）
+├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 18b）
 ├── docker-compose.yml
 ├── backend/                       # 业务实现 + 统一 CLI
 │   ├── main.py                    # python main.py …
-│   ├── shared/                    # DB / UPSERT / akshare / universe 解析
+│   ├── shared/                    # DB / UPSERT / akshare / universe / impact
 │   ├── data_ingest/               # CORE + ALPHA 取数
 │   ├── data_process/ data_quality/ security_master/
 │   ├── research_lab/ backtest/
@@ -93,7 +93,7 @@ EvoQuantAAA
 │   ├── orchestrator/ ops_monitor/ api_gateway/
 │   ├── e2e/ tests/
 ├── database/
-│   ├── migrations/                # 001–034（新文件从 035 起）
+│   ├── migrations/                # 001–035（新文件从 036 起）
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
@@ -361,10 +361,9 @@ cd frontend/console && python -m http.server 8081
 
 （详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. 冲击成本、T+1 open 等成交假设（`backtest` + `execution`）  
-2. console 写操作（经 `api_gateway`）  
-3. 更长窗 OOS 证据固化（研究侧，非本机 bulk）  
-4. 实盘柜台适配器（更后）
+1. console 写操作（经 `api_gateway`：Kill / 晋升审批等）  
+2. 更长窗 OOS 证据固化（研究侧，非本机 bulk）  
+3. 实盘柜台适配器（更后）
 
 ---
 
@@ -387,8 +386,16 @@ cd frontend/console && python -m http.server 8081
 | 16 | `032` | 晋升质量门 |
 | 17 | `033` | 未成交残差 pending |
 | 18a | `034` | 行业·ADV 风控；研究证据包（并行） |
+| 18b | `035` | sqrt ADV 冲击成本 |
 
 ---
+
+### 2026-07-28 · 阶段 18b：冲击成本（sqrt ADV）
+- **动机**：flat 滑点低估大单冲击；回测与纸面需同一套可版本化冲击假设。
+- **迁移**：`035_impact_cost.sql` → `cost_params.impact_*` + 种子 `v2_sqrt_impact`（`v1_ashare_default` 仍为 flat）。
+- **模块**：`shared/impact.py`；`backtest` 引擎/服务；`execution/paper` + ADV 补数；CLI `--cost-version`。
+- **行为**：总滑点 = 基滑点 + `coef * sqrt(名义/ADV)`；ADV 缺省退回基滑点；回测预热滚动 amount；执行/续撮点时 ADV。
+- **验收**：migrate `035`；冲击 pytest；全量 pytest；文档同步。
 
 ### 2026-07-28 · 阶段 18a：行业·ADV 风控 + 研究证据包
 - **动机**：纸面链路已通，但事前风控缺流动性/行业集中约束；因子侧缺可复现的多窗证据汇总。
@@ -635,7 +642,7 @@ cd frontend/console && python -m http.server 8081
 | 文档 | 内容 |
 | --- | --- |
 | [ARCHITECTURE_PRINCIPLES.md](./ARCHITECTURE_PRINCIPLES.md) | 强制架构、不变量、合入清单 |
-| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 18a） |
+| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 18b） |
 | [backend/README.md](./backend/README.md) | 后端模块总览与 CLI |
 | [database/README.md](./database/README.md) | 迁移与契约入口 |
 | [database/schema/README.md](./database/schema/README.md) | 表产消登记（权威） |

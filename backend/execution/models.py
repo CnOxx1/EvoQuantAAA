@@ -14,6 +14,13 @@ class CostSnapshot:
     stamp_tax_rate: float
     slippage_rate: float
     lot_size: int = 100
+    impact_model: str = "flat"
+    impact_coef: float = 0.0
+    adv_lookback_days: int = 20
+
+    @property
+    def needs_adv(self) -> bool:
+        return (self.impact_model or "flat").strip().lower() == "sqrt_adv"
 
 
 @dataclass
