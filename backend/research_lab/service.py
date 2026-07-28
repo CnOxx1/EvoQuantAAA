@@ -7,10 +7,14 @@ from typing import Any
 
 from research_lab.evaluate import evaluate_factor, format_eval_report
 from research_lab.evidence import (
+    artifact_hash,
     format_evidence_pack,
+    hard_oos_verdict,
+    oos_eval_windows,
+    pack_freeze_eligibility,
     soft_verdict,
     summarize_oos,
-    year_windows,
+    walk_forward_windows,
 )
 from research_lab.factors import (
     compute_flow_net_5,
@@ -23,6 +27,8 @@ from research_lab.models import (
     FACTOR_CODES,
     EvidenceRequest,
     EvidenceResult,
+    FreezeRequest,
+    FreezeResult,
     ResearchRequest,
     ResearchResult,
 )
@@ -393,7 +399,18 @@ class ResearchService:
                 report = (ev.meta or {}).get("report") or {}
                 row["report"] = report
                 row["verdict"] = soft_verdict(report, request.soft_gates)
-                if request.year_split:
+                split_mode = (request.split_mode or "year").strip().lower()
+                if request.year_split is False and split_mode == "year":
+                    split_mode = "none"
+                folds = oos_eval_windows(
+                    start,
+                    end,
+                    split_mode=split_mode,
+                    train_days=request.wf_train_days,
+                    test_days=request.wf_test_days,
+                    step_days=request.wf_step_days,
+                )
+                if folds:
                     snapshot_id, symbols = self.repo.load_universe_symbols(
                         universe_code=request.universe_code,
                         as_of=start,
@@ -413,12 +430,20 @@ class ResearchService:
                         factor_type=request.factor_type,
                         lookback_calendar_days=5,
                     )
-                    by_year: dict[str, Any] = {}
-                    # bars 按日期排序后，年窗末日后取若干交易日供 t→t+1
+                    by_fold: dict[str, Any] = {}
                     bar_dates_sorted = sorted(
                         {str(r["trade_date"])[:10] for r in bars}
                     )
-                    for ylabel, w0, w1 in year_windows(start, end):
+                    wf_meta = None
+                    if split_mode in ("walk_forward", "wf"):
+                        wf_meta = walk_forward_windows(
+                            start,
+                            end,
+                            train_days=request.wf_train_days,
+                            test_days=request.wf_test_days,
+                            step_days=request.wf_step_days,
+                        )
+                    for ylabel, w0, w1 in folds:
                         f_slice = [
                             r
                             for r in factor_rows
@@ -434,30 +459,61 @@ class ResearchService:
                         yrep = evaluate_factor(
                             factor_rows=f_slice, ret_rows=b_slice
                         )
-                        by_year[ylabel] = {
+                        fold_row: dict[str, Any] = {
                             "start": w0,
                             "end": w1,
                             "report": yrep,
                             "universe_snapshot_id": snapshot_id,
                         }
+                        if wf_meta:
+                            match = next(
+                                (x for x in wf_meta if x[0] == ylabel), None
+                            )
+                            if match:
+                                fold_row["train_start"] = match[1]
+                                fold_row["train_end"] = match[2]
+                        by_fold[ylabel] = fold_row
+                    oos_summary = summarize_oos(by_fold)
                     row["oos"] = {
-                        "by_year": by_year,
-                        "summary": summarize_oos(by_year),
+                        "split_mode": split_mode,
+                        "by_fold": by_fold,
+                        "by_year": by_fold,  # 兼容旧读者
+                        "summary": oos_summary,
                     }
+                    row["hard_oos"] = hard_oos_verdict(
+                        oos_summary, request.hard_oos_gates
+                    )
             factors_out[code] = row
 
+        split_mode = (request.split_mode or "year").strip().lower()
+        if request.year_split is False and split_mode == "year":
+            split_mode = "none"
         pack: dict[str, Any] = {
             "mode": "evidence",
             "universe_code": request.universe_code,
             "start": start,
             "end": end,
             "factor_type": request.factor_type,
-            "year_split": request.year_split,
+            "year_split": split_mode == "year",
+            "split_mode": split_mode,
+            "walk_forward": {
+                "train_days": request.wf_train_days,
+                "test_days": request.wf_test_days,
+                "step_days": request.wf_step_days
+                if request.wf_step_days is not None
+                else request.wf_test_days,
+            }
+            if split_mode in ("walk_forward", "wf")
+            else None,
             "with_backtest": False,
             "compute_first": request.compute_first,
             "factors": factors_out,
             "job_id": request.job_id,
         }
+        pack["freeze_eligibility"] = pack_freeze_eligibility(
+            pack, request.hard_oos_gates
+        )
+        pack["artifact_hash"] = artifact_hash(pack)
         pack["report_text"] = format_evidence_pack(pack)
         status = "committed" if any_ok else "failed"
         self.repo.create_run(
@@ -480,6 +536,110 @@ class ResearchService:
             end=end,
             message=pack["report_text"],
             pack=pack,
+        )
+
+    def freeze_evidence(self, request: FreezeRequest) -> FreezeResult:
+        """将已 committed 的 EVIDENCE_PACK 固化为不可变冻结记录。"""
+        run = self.repo.get_run(request.evidence_run_id)
+        if not run:
+            return FreezeResult(
+                status="failed",
+                evidence_run_id=request.evidence_run_id,
+                message="evidence_run_id 不存在",
+            )
+        if str(run.get("status")) != "committed":
+            return FreezeResult(
+                status="rejected",
+                evidence_run_id=request.evidence_run_id,
+                message=f"research_run 状态非 committed: {run.get('status')}",
+            )
+        if str(run.get("factor_code")) != "EVIDENCE_PACK":
+            return FreezeResult(
+                status="rejected",
+                evidence_run_id=request.evidence_run_id,
+                message="仅支持 factor_code=EVIDENCE_PACK",
+            )
+        pack = run.get("meta") or {}
+        if not isinstance(pack, dict) or pack.get("mode") != "evidence":
+            return FreezeResult(
+                status="rejected",
+                evidence_run_id=request.evidence_run_id,
+                message="meta.mode 不是 evidence",
+            )
+
+        eligibility = pack_freeze_eligibility(pack, request.hard_oos_gates)
+        if not eligibility.get("eligible") and not request.force:
+            return FreezeResult(
+                status="rejected",
+                evidence_run_id=request.evidence_run_id,
+                message="硬 OOS 门槛未通过（加 --force 可强制冻结，不推荐）",
+                meta={"freeze_eligibility": eligibility},
+            )
+        if request.force and not request.reason:
+            return FreezeResult(
+                status="rejected",
+                evidence_run_id=request.evidence_run_id,
+                message="--force 冻结必须提供 --reason",
+            )
+
+        h = artifact_hash(pack)
+        existing = self.repo.find_freeze_by_hash(h)
+        if existing:
+            return FreezeResult(
+                status="skipped",
+                freeze_id=str(existing["freeze_id"]),
+                evidence_run_id=request.evidence_run_id,
+                artifact_hash=h,
+                message="相同 artifact_hash 已冻结（幂等）",
+                meta={"existing": True},
+            )
+
+        freeze_id = f"ef_{uuid.uuid4().hex}"
+        created = _utcnow()
+        summary = {
+            "freeze_eligibility": eligibility,
+            "split_mode": pack.get("split_mode"),
+            "factors": {
+                code: {
+                    "soft_passed": ((row.get("verdict") or {}).get("passed")),
+                    "hard_oos": row.get("hard_oos"),
+                    "oos_summary": (row.get("oos") or {}).get("summary"),
+                }
+                for code, row in (pack.get("factors") or {}).items()
+                if isinstance(row, dict)
+            },
+        }
+        self.repo.insert_freeze(
+            {
+                "freeze_id": freeze_id,
+                "evidence_run_id": request.evidence_run_id,
+                "universe_code": str(
+                    pack.get("universe_code") or run.get("universe_code") or ""
+                ),
+                "start_date": str(pack.get("start") or run.get("start_date"))[:10],
+                "end_date": str(pack.get("end") or run.get("end_date"))[:10],
+                "status": "frozen",
+                "split_mode": str(pack.get("split_mode") or "year"),
+                "hard_gates": request.hard_oos_gates or {},
+                "summary": summary,
+                "artifact_hash": h,
+                "actor": request.actor,
+                "reason": request.reason,
+                "job_id": request.job_id,
+                "meta": {
+                    "force": request.force,
+                    "eligible_factors": eligibility.get("eligible_factors"),
+                },
+                "created_at": created,
+            }
+        )
+        return FreezeResult(
+            status="frozen",
+            freeze_id=freeze_id,
+            evidence_run_id=request.evidence_run_id,
+            artifact_hash=h,
+            message=f"frozen factors={eligibility.get('eligible_factors')}",
+            meta=summary,
         )
 
     def attach_backtests_to_evidence(
@@ -511,6 +671,8 @@ class ResearchService:
                     factors[code]["backtest"] = bt
             meta["factors"] = factors
             meta["with_backtest"] = True
+            meta["freeze_eligibility"] = pack_freeze_eligibility(meta)
+            meta["artifact_hash"] = artifact_hash(meta)
             meta["report_text"] = format_evidence_pack(meta)
             conn.execute(
                 "UPDATE research_run SET meta_json=? WHERE run_id=?",

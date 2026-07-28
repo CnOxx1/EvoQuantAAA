@@ -91,7 +91,8 @@
 | dq_gate | oltp | data_quality | research_lab, backtest, signal_prod, orchestrator | (scope, start, end, factor_type) | 区间最新闸门 |
 | universe_snapshot | ref_data | security_master | research_lab, signal_prod, portfolio_construct, backtest | (as_of_date, universe_code) / universe_snapshot_id | 日快照头；committed 后可见 |
 | universe_snapshot_member | ref_data | security_master | research_lab, signal_prod, portfolio_construct, backtest | (universe_snapshot_id, symbol) | 快照成员（含 ST/行业/权重） |
-| research_run | oltp | research_lab | strategy_registry, ops_monitor | run_id | 计算/评估元数据；`meta_json` 含 IC 报告 |
+| research_run | oltp | research_lab | strategy_registry, ops_monitor | run_id | 计算/评估/证据包；`meta_json` 含 IC/OOS |
+| research_evidence_freeze | oltp | research_lab | strategy_registry（引用） | freeze_id | 证据包冻结快照；artifact_hash 幂等 |
 | research_factor_value | oltp | research_lab | backtest, strategy_registry | (factor_code, symbol, trade_date, universe_code) | 基线因子值；点时=trade_date；幂等 UPSERT |
 | research_* | oltp | research_lab | strategy_registry, backtest | run_id | 非 live |
 | strategy_version | oltp | strategy_registry | signal_prod, backtest | strategy_version | 状态机 DRAFT→…→LIVE；同 code 至多一 LIVE |

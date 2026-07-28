@@ -117,11 +117,54 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
 
 def cmd_research(args: argparse.Namespace) -> int:
-    from research_lab.models import FACTOR_CODES, EvidenceRequest, ResearchRequest
+    from research_lab.models import (
+        FACTOR_CODES,
+        EvidenceRequest,
+        FreezeRequest,
+        ResearchRequest,
+    )
     from research_lab.service import ResearchService
 
+    if getattr(args, "freeze_run", None):
+        fr = ResearchService().freeze_evidence(
+            FreezeRequest(
+                evidence_run_id=str(args.freeze_run),
+                actor=getattr(args, "actor", "cli") or "cli",
+                reason=getattr(args, "reason", None),
+                job_id=args.job_id,
+                force=bool(getattr(args, "force", False)),
+            )
+        )
+        print(
+            f"status={fr.status} freeze_id={fr.freeze_id} "
+            f"evidence_run={fr.evidence_run_id} hash={fr.artifact_hash[:12] if fr.artifact_hash else ''}"
+        )
+        if fr.message:
+            print(fr.message)
+        return 0 if fr.status in ("frozen", "skipped") else 2
+
+    if getattr(args, "list_freezes", False):
+        rows = ResearchService().repo.list_freezes(
+            universe_code=None,
+            limit=int(getattr(args, "limit", 20) or 20),
+        )
+        print(f"freeze_count={len(rows)}")
+        for r in rows:
+            print(
+                f"{r.get('freeze_id')} univ={r.get('universe_code')} "
+                f"{r.get('start_date')}→{r.get('end_date')} "
+                f"split={r.get('split_mode')} run={r.get('evidence_run_id')}"
+            )
+        return 0
+
     if getattr(args, "evidence", False):
+        if not (args.start and args.end):
+            print("status=invalid message=evidence 需要 --start 与 --end")
+            return 2
         codes = list(FACTOR_CODES) if args.factor == "ALL" else [args.factor]
+        split_mode = getattr(args, "split_mode", None) or "year"
+        if getattr(args, "no_year_split", False) and split_mode == "year":
+            split_mode = "none"
         ev = ResearchService().evidence(
             EvidenceRequest(
                 start=args.start,
@@ -131,13 +174,17 @@ def cmd_research(args: argparse.Namespace) -> int:
                 factor_codes=codes,
                 require_dq=not args.no_dq_check,
                 compute_first=bool(getattr(args, "compute_first", False)),
-                year_split=not bool(getattr(args, "no_year_split", False)),
+                year_split=split_mode == "year",
+                split_mode=split_mode,
+                wf_train_days=int(getattr(args, "wf_train_days", 60) or 60),
+                wf_test_days=int(getattr(args, "wf_test_days", 20) or 20),
+                wf_step_days=getattr(args, "wf_step_days", None),
                 job_id=args.job_id,
             )
         )
         print(
             f"status={ev.status} run_id={ev.run_id} universe={ev.universe_code} "
-            f"mode=evidence"
+            f"mode=evidence split={ev.pack.get('split_mode')}"
         )
         if ev.message:
             print(ev.message)
@@ -209,7 +256,30 @@ def cmd_research(args: argparse.Namespace) -> int:
                             meta if isinstance(meta, dict) else {}
                         )
                     )
+
+        if getattr(args, "freeze", False):
+            fr = ResearchService().freeze_evidence(
+                FreezeRequest(
+                    evidence_run_id=ev.run_id,
+                    actor=getattr(args, "actor", "cli") or "cli",
+                    reason=getattr(args, "reason", None),
+                    job_id=args.job_id,
+                    force=bool(getattr(args, "force", False)),
+                )
+            )
+            print(
+                f"freeze status={fr.status} freeze_id={fr.freeze_id} "
+                f"hash={fr.artifact_hash[:12] if fr.artifact_hash else ''}"
+            )
+            if fr.message:
+                print(fr.message)
+            if fr.status not in ("frozen", "skipped"):
+                return 2
         return 0
+
+    if not (args.start and args.end):
+        print("status=invalid message=需要 --start 与 --end")
+        return 2
 
     factors = list(FACTOR_CODES) if args.factor == "ALL" else [args.factor]
     exit_code = 0
@@ -2669,10 +2739,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("--job-id", default=None)
     p_bt.set_defaults(func=cmd_backtest)
 
-    p_rs = sub.add_parser("research", help="研究因子计算 / IC 分层评估")
+    p_rs = sub.add_parser("research", help="研究因子计算 / IC 分层评估 / 证据包冻结")
     p_rs.add_argument(
         "--factor",
-        required=True,
+        default="ALL",
         choices=[
             "MOM_20",
             "VAL_PE_PCT",
@@ -2682,10 +2752,10 @@ def build_parser() -> argparse.ArgumentParser:
             "TECH_MA20_BIAS",
             "ALL",
         ],
-        help="研究因子；ALL=全部依次计算（含 tech 派生）",
+        help="研究因子；ALL=全部（freeze-run / list-freezes 可省略）",
     )
-    p_rs.add_argument("--start", required=True, help="YYYY-MM-DD")
-    p_rs.add_argument("--end", required=True, help="YYYY-MM-DD")
+    p_rs.add_argument("--start", default=None, help="YYYY-MM-DD（compute/evaluate/evidence 必需）")
+    p_rs.add_argument("--end", default=None, help="YYYY-MM-DD")
     p_rs.add_argument(
         "--universe",
         default="TOP100",
@@ -2701,12 +2771,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_rs.add_argument(
         "--evidence",
         action="store_true",
-        help="研究证据包：多因子 IC + soft 结论 + 可选年切 OOS / 回测",
+        help="研究证据包：多因子 IC + soft/hard OOS + 可选回测/冻结",
+    )
+    p_rs.add_argument(
+        "--split-mode",
+        default="year",
+        choices=["year", "walk_forward", "none"],
+        help="证据包 OOS 切分：year（默认）/ walk_forward / none",
     )
     p_rs.add_argument(
         "--no-year-split",
         action="store_true",
-        help="证据包：关闭按自然年切分的 OOS IC（默认开启年切）",
+        help="证据包：等价 --split-mode none",
+    )
+    p_rs.add_argument(
+        "--wf-train-days",
+        type=int,
+        default=60,
+        help="walk_forward 训练窗日历日（开发机冒烟可调小）",
+    )
+    p_rs.add_argument(
+        "--wf-test-days",
+        type=int,
+        default=20,
+        help="walk_forward 测试窗日历日",
+    )
+    p_rs.add_argument(
+        "--wf-step-days",
+        type=int,
+        default=None,
+        help="walk_forward 步进（默认=test-days）",
     )
     p_rs.add_argument(
         "--compute-first",
@@ -2716,7 +2810,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_rs.add_argument(
         "--with-backtest",
         action="store_true",
-        help="证据包：对 soft 通过/已评估因子跑 FACTOR_TOP_N（扣 cost_params）",
+        help="证据包：对已评估因子跑 FACTOR_TOP_N（扣 cost_params）",
+    )
+    p_rs.add_argument(
+        "--freeze",
+        action="store_true",
+        help="证据包生成后尝试写入 research_evidence_freeze",
+    )
+    p_rs.add_argument(
+        "--freeze-run",
+        default=None,
+        help="冻结已有 EVIDENCE_PACK run_id（无需 --start/--end）",
+    )
+    p_rs.add_argument(
+        "--list-freezes",
+        action="store_true",
+        help="列出已冻结证据",
+    )
+    p_rs.add_argument("--limit", type=int, default=20, help="list-freezes 条数")
+    p_rs.add_argument("--actor", default="cli", help="冻结操作者")
+    p_rs.add_argument("--reason", default=None, help="冻结原因（--force 时必填）")
+    p_rs.add_argument(
+        "--force",
+        action="store_true",
+        help="硬 OOS 未过时强制冻结（须 --reason）",
     )
     p_rs.add_argument("--top-n", type=int, default=20, help="证据包回测 top_n")
     p_rs.add_argument(

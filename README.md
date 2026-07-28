@@ -53,14 +53,14 @@
 
 ## 2. 当前完成度
 
-**状态（2026-07-28）**：阶段 **1–17** + **18a/18b** + **研究证据包** + **console 写操作** 已落地；迁移 **`001`–`035`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；运维台可 Kill/晋升/审核；**未接**真实柜台。
+**状态（2026-07-28）**：阶段 **1–19**（含 18a/18b、证据冻结、console 写）已落地；迁移 **`001`–`036`**。纸面全链路可跑；晋升含质量门；运维台可写；**未接**真实柜台。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
 | CORE 取数 / 加工 / DQ | ✅ | 日线复权、停牌涨跌停、`can_buy`/`can_sell`、CORE gate |
 | ALPHA 取数 | ✅ | 可插拔；失败不挡 CORE |
 | Universe | ✅ | TOP100 / SECTOR_LEADERS / 指数成分等日快照 |
-| 研究因子 + IC + 证据包 | ✅ | MOM / VAL / FLOW / TECH_*；`research --evidence` 年切 OOS |
+| 研究因子 + IC + 证据包 | ✅ | 年切 / walk-forward OOS；可冻结 `research_evidence_freeze` |
 | 回测引擎 | ✅ | EW_* / FACTOR_TOP_N；FIFO lot T+1；`close` 成交；**可选 sqrt ADV 冲击** |
 | 策略晋升 + 质量门 | ✅ | DRAFT→…→LIVE；IC/DD/样本窗（`032`） |
 | 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；Kill Switch；账户合并敞口；**v2 行业/ADV** |
@@ -68,7 +68,7 @@
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
 | API + E2E + console | ✅ | `/v1`；`python main.py e2e`；运维台含写操作 |
 | 实盘柜台 | ❌ | 仅 paper adapter |
-| 长窗 OOS 证据固化 | ⏳ | 下一优先（非本机 bulk） |
+| 长窗数据回填 | ⏳ | 工具已就绪；勿在本机 ALL_LISTED bulk |
 
 **开发机约束**：只做短窗冒烟（几天～约 1 个月、TOP100 或单票）。**禁止** ALL_LISTED（6000+）长窗 bulk、禁止本机长历史回填。
 
@@ -93,7 +93,7 @@ EvoQuantAAA
 │   ├── orchestrator/ ops_monitor/ api_gateway/
 │   ├── e2e/ tests/
 ├── database/
-│   ├── migrations/                # 001–035（新文件从 036 起）
+│   ├── migrations/                # 001–036（新文件从 037 起）
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
@@ -361,8 +361,8 @@ cd frontend/console && python -m http.server 8081
 
 （详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. 更长窗 OOS 证据固化（研究侧，非本机 bulk）  
-2. 实盘柜台适配器（更后）
+1. 实盘柜台适配器（更后）  
+2. 在有历史数据的环境跑长窗 OOS + `--freeze`（勿本机 ALL_LISTED bulk）
 
 ---
 
@@ -387,8 +387,16 @@ cd frontend/console && python -m http.server 8081
 | 18a | `034` | 行业·ADV 风控；研究证据包（并行） |
 | 18b | `035` | sqrt ADV 冲击成本 |
 | C | （无） | console 写：Kill / 晋升 / review |
+| 19 | `036` | OOS 证据冻结（walk-forward + freeze 表） |
 
 ---
+
+### 2026-07-28 · 阶段 19：OOS 证据冻结
+- **动机**：证据包仅落 `research_run`，缺 walk-forward 与可复现冻结产物；长窗研究需要固化工具而非本机 bulk。
+- **迁移**：`036_evidence_freeze.sql` → `research_evidence_freeze`（`artifact_hash` 幂等）。
+- **模块**：`research_lab/evidence.py`（walk-forward / 硬 OOS / hash）；`ResearchService.freeze_evidence`；CLI。
+- **行为**：`--split-mode year|walk_forward|none`；硬门槛后 `--freeze` / `--freeze-run`；`--force` 须原因。
+- **验收**：migrate `036`；证据 pytest；全量 pytest；文档同步。
 
 ### 2026-07-28 · console 写操作
 - **动机**：网关已有 promote / kill / review，运维台仍只读，人工审批只能走 CLI。
@@ -649,7 +657,7 @@ cd frontend/console && python -m http.server 8081
 | 文档 | 内容 |
 | --- | --- |
 | [ARCHITECTURE_PRINCIPLES.md](./ARCHITECTURE_PRINCIPLES.md) | 强制架构、不变量、合入清单 |
-| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至 18b + console 写） |
+| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 19） |
 
 | [backend/README.md](./backend/README.md) | 后端模块总览与 CLI |
 | [database/README.md](./database/README.md) | 迁移与契约入口 |

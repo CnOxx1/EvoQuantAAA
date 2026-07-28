@@ -8,9 +8,10 @@
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
 | 因子值 | `research_factor_value` | `research` 计算任务 UPSERT（幂等） |
-| 实验运行 | `research_run` | 计算/评估任务元数据 + `meta_json`（`report.ic_*` 供晋升 LIVE 质量门）；证据包 `factor_code=EVIDENCE_PACK` |
+| 实验运行 | `research_run` | 计算/评估/证据包元数据；`EVIDENCE_PACK` 含 OOS |
+| 证据冻结 | `research_evidence_freeze` | `research --freeze` / `--freeze-run`；幂等按 artifact_hash |
 
-迁移：`database/migrations/017_research_lab.sql`。
+迁移：`017_research_lab.sql`、`036_evidence_freeze.sql`。
 
 ## 基线因子
 
@@ -25,22 +26,30 @@
 
 技术指标因子依赖先跑：`data_process --kind tech_indicator`（日更 `daily` 已含 suite=core）。
 
-## 研究证据包
+## 研究证据包与冻结
 
-多因子 IC + soft 结论 + 可选自然年 OOS；可选 CLI 编排 `FACTOR_TOP_N` 回测后回写（模块间不互相 import）。
+多因子 IC + soft 结论 + OOS（年切或 walk-forward）+ 硬 OOS 门槛；可选回测回写；可冻结为不可变产物（迁移 `036`）。
 
 ```bash
 cd backend
-# 证据包（默认年切；短窗冒烟）
+# 年切证据包（短窗冒烟）
 python main.py research --evidence --factor ALL --universe TOP100 \
   --start 2026-06-01 --end 2026-07-23
-# 评估前先 compute；附带回测
+# walk-forward（开发机用小窗；长窗在有数据的环境跑，勿本机 bulk）
 python main.py research --evidence --factor MOM_20 --universe TOP100 \
-  --start 2026-06-01 --end 2026-07-23 --compute-first --with-backtest
+  --start 2026-06-01 --end 2026-07-23 \
+  --split-mode walk_forward --wf-train-days 10 --wf-test-days 5 --wf-step-days 5
+# 生成后冻结（硬门槛未过则拒绝；--force 须 --reason）
+python main.py research --evidence --factor MOM_20 --universe TOP100 \
+  --start 2026-06-01 --end 2026-07-23 --freeze
+python main.py research --freeze-run re_xxx --reason "oos review"
+python main.py research --list-freezes
 python -m pytest tests/test_research_evidence.py -q
 ```
 
-落库：`research_run.factor_code=EVIDENCE_PACK`，`meta_json.mode=evidence`。
+落库：
+- `research_run.factor_code=EVIDENCE_PACK`，`meta_json.mode=evidence`（含 `split_mode` / `hard_oos` / `artifact_hash`）
+- `research_evidence_freeze`：冻结快照 + `artifact_hash` 幂等
 
 ## 协作模块索引（供 AI Agent）
 

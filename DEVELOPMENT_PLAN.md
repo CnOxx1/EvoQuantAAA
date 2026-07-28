@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–17**、**18a/18b**、研究证据包、**console 写操作**已落地（迁移 `001`–`035`，写操作无新迁移）。  
-**下一优先**：更长窗 OOS 证据固化 / 实盘柜台（更后）。  
+**当前进度**：阶段 **1–18b**、研究证据包、console 写、**阶段 19（OOS 证据冻结）**已落地（迁移 `001`–`036`）。  
+**下一优先**：实盘柜台适配器（更后）。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `035`（impact cost），**新迁移从 `036` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `036`（evidence freeze），**新迁移从 `037` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -71,9 +71,12 @@
 | 研究证据包 | `research --evidence`（年切 OOS + soft 结论；可选回测） |
 | 冲击成本 | `cost_params` v2_sqrt_impact；回测/纸面共用（迁移 `035`） |
 | console 写 | Kill / 晋升 / 风控审核经 gateway（无新迁移） |
+| OOS 证据冻结 | walk-forward + `research_evidence_freeze`（迁移 `036`） |
 | E2E + console | `python main.py e2e`；`frontend/console` |
 
-> **console 写（2026-07-28）**：运维台 POST Kill / promote / review；跳过质量门须原因；审计仍走 `api_audit_log`。下一优先：长窗 OOS / 实盘柜台。
+> **阶段 19（2026-07-28）**：长窗 OOS 证据固化——`walk_forward` 切分 + 硬 OOS 门槛；冻结表 `research_evidence_freeze`（artifact_hash 幂等）。开发机仅短窗冒烟，长窗在有数据环境跑。下一优先：实盘柜台。
+>
+> **console 写（2026-07-28）**：运维台 POST Kill / promote / review；跳过质量门须原因；审计仍走 `api_audit_log`。
 >
 > **阶段 18b（2026-07-28）**：成交冲击——`cost_params` 扩展 `impact_model/coef/adv_lookback`；种子 `v2_sqrt_impact`；`shared/impact.py` 纯函数；回测与纸面执行按名义/ADV 附加滑点。
 >
@@ -484,6 +487,20 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：静态页可提交写操作；文档同步。
 
+---
+
+## 阶段 19 · 长窗 OOS 证据固化（research）
+
+### 任务 19.1 walk-forward + 冻结表
+
+**要求**：
+1. `evidence.py`：`walk_forward_windows` / 硬 OOS 门槛 / `artifact_hash` / 冻结资格
+2. 迁移 `036`：`research_evidence_freeze`；同 hash 幂等
+3. CLI：`--split-mode year|walk_forward|none`、`--wf-*`、`--freeze` / `--freeze-run` / `--list-freezes`
+4. 开发机禁止长窗 bulk；pytest 覆盖纯函数；文档同步
+
+**验收**：migrate `036`；证据/冻结单测绿；pytest 全绿。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -521,3 +538,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 18a | 18a.2 研究证据包 | `research --evidence` |
 | 18b | 18b.1 sqrt ADV 冲击 | `v2_sqrt_impact`；回测/执行共用 |
 | C | C.1 console 写 | Kill / 晋升 / review UI |
+| 19 | 19.1 OOS 冻结 | walk-forward + research_evidence_freeze |

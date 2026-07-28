@@ -41,9 +41,14 @@ class EvidenceRequest:
     factor_codes: list[str] = field(default_factory=list)
     require_dq: bool = True
     compute_first: bool = False
-    year_split: bool = True
+    year_split: bool = True  # 兼容：True≈split_mode=year
+    split_mode: str = "year"  # year | walk_forward | none
+    wf_train_days: int = 60
+    wf_test_days: int = 20
+    wf_step_days: int | None = None
     job_id: str | None = None
     soft_gates: dict[str, Any] | None = None
+    hard_oos_gates: dict[str, Any] | None = None
 
 
 @dataclass
@@ -55,3 +60,23 @@ class EvidenceResult:
     end: str = ""
     message: str = ""
     pack: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class FreezeRequest:
+    evidence_run_id: str
+    actor: str = "cli"
+    reason: str | None = None
+    job_id: str | None = None
+    hard_oos_gates: dict[str, Any] | None = None
+    force: bool = False
+
+
+@dataclass
+class FreezeResult:
+    status: str  # frozen | rejected | failed | skipped
+    freeze_id: str = ""
+    evidence_run_id: str = ""
+    artifact_hash: str = ""
+    message: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)

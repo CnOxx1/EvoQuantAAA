@@ -294,3 +294,82 @@ class ResearchRepository:
                 (factor_code, universe_code, start, end),
             ).fetchone()
         return int(row["n"])
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_run WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        meta = d.get("meta_json")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except json.JSONDecodeError:
+                meta = {}
+        d["meta"] = meta if isinstance(meta, dict) else {}
+        return d
+
+    def find_freeze_by_hash(self, artifact_hash: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM research_evidence_freeze
+                WHERE artifact_hash=? AND status='frozen'
+                LIMIT 1
+                """,
+                (artifact_hash,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def insert_freeze(self, row: dict[str, Any]) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO research_evidence_freeze (
+                    freeze_id, evidence_run_id, universe_code, start_date, end_date,
+                    status, split_mode, hard_gates_json, summary_json, artifact_hash,
+                    actor, reason, job_id, meta_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["freeze_id"],
+                    row["evidence_run_id"],
+                    row["universe_code"],
+                    row["start_date"],
+                    row["end_date"],
+                    row["status"],
+                    row["split_mode"],
+                    json.dumps(row.get("hard_gates") or {}, ensure_ascii=False),
+                    json.dumps(row.get("summary") or {}, ensure_ascii=False),
+                    row["artifact_hash"],
+                    row.get("actor"),
+                    row.get("reason"),
+                    row.get("job_id"),
+                    json.dumps(row.get("meta") or {}, ensure_ascii=False),
+                    row["created_at"],
+                ),
+            )
+
+    def list_freezes(
+        self,
+        *,
+        universe_code: str | None = None,
+        status: str = "frozen",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM research_evidence_freeze WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        if universe_code:
+            sql += " AND universe_code=?"
+            params.append(universe_code)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 200)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]

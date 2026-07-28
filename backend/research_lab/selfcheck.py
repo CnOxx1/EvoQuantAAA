@@ -112,11 +112,27 @@ def _run_mock() -> None:
     )
     assert len(bias) == 1 and abs(bias[0]["value"] - 0.1) < 1e-9
 
-    from research_lab.evidence import soft_verdict, year_windows
+    from research_lab.evidence import (
+        hard_oos_verdict,
+        soft_verdict,
+        walk_forward_windows,
+        year_windows,
+    )
 
     assert year_windows("2025-12-01", "2026-01-15")[0][0] == "2025"
     v = soft_verdict({"ic_mean": 0.01, "icir": 0.2, "ic_days": 25})
     assert v["passed"] is True
+    folds = walk_forward_windows(
+        "2026-01-01", "2026-02-10", train_days=7, test_days=5, step_days=5
+    )
+    assert len(folds) >= 1
+    assert hard_oos_verdict(
+        {
+            "fold_count": 2,
+            "positive_ic_fold_ratio": 0.5,
+            "ic_mean_avg": 0.0,
+        }
+    )["passed"]
 
     print("mock_cases=ok")
 
