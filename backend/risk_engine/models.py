@@ -12,6 +12,11 @@ class RiskLimits:
     max_gross_exposure: float = 1.01
     min_names: int = 1
     lot_size: int = 100
+    # 阶段 18a：可选（NULL/None = 不检查）
+    max_industry_weight: float | None = None
+    max_adv_participation: float | None = None
+    adv_lookback_days: int = 20
+    industry_standard: str = "SW2021"
 
 
 @dataclass

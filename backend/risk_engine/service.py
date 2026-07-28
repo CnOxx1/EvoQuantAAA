@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from risk_engine.models import RiskReviewRequest, RiskReviewResult
+from risk_engine.models import RiskLimits, RiskReviewRequest, RiskReviewResult
 from risk_engine.repository import RiskRepository
 from risk_engine.rules import evaluate_account_book, evaluate_portfolio
 
@@ -19,6 +19,46 @@ def _utcnow() -> str:
 class RiskEngineService:
     def __init__(self, *, repo: RiskRepository | None = None) -> None:
         self.repo = repo or RiskRepository()
+
+    def _enrich_liquidity_meta(
+        self,
+        positions: list[dict[str, Any]],
+        *,
+        as_of: str,
+        limits: RiskLimits,
+        universe_code: str | None,
+        factor_type: str,
+    ) -> None:
+        """就地补充 industry_code / adv_20（limits 启用对应检查时）。"""
+        need_ind = limits.max_industry_weight is not None
+        need_adv = limits.max_adv_participation is not None
+        if not (need_ind or need_adv) or not as_of:
+            return
+        symbols = [str(p["symbol"]) for p in positions if p.get("symbol")]
+        if not symbols:
+            return
+        ind_map: dict[str, str] = {}
+        adv_map: dict[str, float] = {}
+        if need_ind:
+            ind_map = self.repo.load_industry_map(
+                symbols=symbols,
+                as_of=as_of,
+                standard=limits.industry_standard,
+                universe_code=universe_code,
+            )
+        if need_adv:
+            adv_map = self.repo.load_adv_map(
+                symbols=symbols,
+                as_of=as_of,
+                lookback_days=limits.adv_lookback_days,
+                factor_type=factor_type,
+            )
+        for p in positions:
+            sym = str(p.get("symbol") or "")
+            if sym in ind_map:
+                p["industry_code"] = ind_map[sym]
+            if sym in adv_map:
+                p["adv_20"] = adv_map[sym]
 
     def review(self, request: RiskReviewRequest) -> RiskReviewResult:
         pf = self.repo.get_portfolio(request.portfolio_id)
@@ -67,6 +107,30 @@ class RiskEngineService:
         )
 
         positions = self.repo.list_positions(request.portfolio_id)
+        as_of = str(pf.get("as_of_date") or "")[:10]
+        pmeta = pf.get("meta") or pf.get("meta_json") or {}
+        if isinstance(pmeta, str):
+            try:
+                import json
+
+                pmeta = json.loads(pmeta or "{}")
+            except json.JSONDecodeError:
+                pmeta = {}
+        if not isinstance(pmeta, dict):
+            pmeta = {}
+        universe_code = (
+            str(pmeta.get("universe_code") or pf.get("universe_code") or "")
+            or None
+        )
+        factor_type = str(pmeta.get("factor_type") or "qfq")
+        self._enrich_liquidity_meta(
+            positions,
+            as_of=as_of,
+            limits=limits,
+            universe_code=universe_code,
+            factor_type=factor_type,
+        )
+
         breaches = evaluate_portfolio(
             positions=positions,
             nav=float(pf.get("nav") or 0),
@@ -79,7 +143,6 @@ class RiskEngineService:
             limits=limits,
         )
         # 同账户同日其他活跃组合：合并敞口，防止多策略同票叠加超限
-        as_of = str(pf.get("as_of_date") or "")[:10]
         siblings = self.repo.list_account_active_portfolios(
             account_id=account_id,
             as_of=as_of,
@@ -88,28 +151,29 @@ class RiskEngineService:
         if siblings:
             books = [positions]
             for sib in siblings:
-                books.append(self.repo.list_positions(str(sib["portfolio_id"])))
-            # 账户分母用本组合 nav 所在账户口径：优先用各 slice nav 之和仅当均来自配额；
-            # 更稳：用本 pf.nav / capital_weight 反推，缺则 sum(nav)
+                sib_pos = self.repo.list_positions(str(sib["portfolio_id"]))
+                self._enrich_liquidity_meta(
+                    sib_pos,
+                    as_of=as_of,
+                    limits=limits,
+                    universe_code=universe_code,
+                    factor_type=factor_type,
+                )
+                books.append(sib_pos)
+            # 账户分母：优先用本 pf.nav / capital_weight 反推，缺则 sum(nav)
             cw = None
-            raw_meta = pf.get("meta") or pf.get("meta_json") or {}
-            if isinstance(raw_meta, str):
+            if pmeta.get("capital_weight"):
                 try:
-                    import json
-
-                    raw_meta = json.loads(raw_meta or "{}")
-                except json.JSONDecodeError:
-                    raw_meta = {}
-            if isinstance(raw_meta, dict) and raw_meta.get("capital_weight"):
-                try:
-                    cw = float(raw_meta["capital_weight"])
+                    cw = float(pmeta["capital_weight"])
                 except (TypeError, ValueError):
                     cw = None
             slice_nav = float(pf.get("nav") or 0)
             if cw and cw > 0 and slice_nav > 0:
                 account_nav = slice_nav / cw
             else:
-                account_nav = slice_nav + sum(float(s.get("nav") or 0) for s in siblings)
+                account_nav = slice_nav + sum(
+                    float(s.get("nav") or 0) for s in siblings
+                )
             acct_breaches = evaluate_account_book(
                 position_books=books,
                 account_nav=account_nav if account_nav > 0 else slice_nav,

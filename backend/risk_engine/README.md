@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 风控决策 | `risk_decision` | `risk review`；同步写 `portfolio_target.status` |
 | Kill Switch | `kill_switch` | `risk kill --on/--off` |
-| 限额参数 | `risk_limits` | 迁移种子 `v1_default` |
+| 限额参数 | `risk_limits` | 迁移种子 `v1_default` / `v2_adv_industry` |
 
 
 ## 本目录模块一览
@@ -45,6 +45,14 @@
 - 整手校验用 `cost_params.lot_size`（默认 100）
 - **账户级**：同账户同日多策略目标腿按 `target_value` 合并后，相对合计 `nav` 再验单票与总敞口
 
+## 硬规则（v2_adv_industry，阶段 18a）
+在 v1 基础上启用（`risk review --limits-version v2_adv_industry`）：
+- **行业集中度**：同行业 `target_value` 合计 / NAV ≤ `max_industry_weight`（默认 30%）；行业来自 universe 快照成员或 `raw_industry_class` 点时
+- **ADV 参与度**：单票 `target_value` / 近 N 日均成交额（`processed_equity_bar_1d.amount`，默认 20 日）≤ `max_adv_participation`（默认 10%）
+- 缺行业码 / 缺 ADV → 硬拒绝（`MISSING_INDUSTRY` / `MISSING_ADV`）
+- 账户合并同验：`ACCOUNT_MAX_INDUSTRY_WEIGHT` / `ACCOUNT_MAX_ADV_PARTICIPATION`
+- `v1_default` 新增列为 NULL，行为不变
+
 | code | 含义 |
 | --- | --- |
 | `KILL_SWITCH_ON` | GLOBAL 或账户 Kill Switch 开启 |
@@ -53,6 +61,11 @@
 | `MAX_GROSS_EXPOSURE` | invested/nav > 101%（本策略） |
 | `ACCOUNT_MAX_SINGLE_WEIGHT` | 账户合并单票权重超限 |
 | `ACCOUNT_MAX_GROSS_EXPOSURE` | 账户合并总敞口超限 |
+| `MAX_INDUSTRY_WEIGHT` | 单策略行业权重超限（v2） |
+| `MAX_ADV_PARTICIPATION` | 单策略 ADV 参与度超限（v2） |
+| `MISSING_INDUSTRY` / `MISSING_ADV` | v2 启用时缺数据 |
+| `ACCOUNT_MAX_INDUSTRY_WEIGHT` | 账户合并行业超限（v2） |
+| `ACCOUNT_MAX_ADV_PARTICIPATION` | 账户合并 ADV 超限（v2） |
 | `CANNOT_BUY` | 目标股数>0 但 can_buy≠1 |
 | `LOT_SIZE` | 股数非整手（按 `cost_params.lot_size`） |
 
@@ -61,6 +74,7 @@
 ```bash
 cd backend
 python main.py risk review --portfolio pf_xxx
+python main.py risk review --portfolio pf_xxx --limits-version v2_adv_industry
 python main.py risk review --drafts --as-of 2026-07-23
 python main.py risk kill --on --scope GLOBAL --reason halt
 python main.py risk kill --off --scope GLOBAL

@@ -53,22 +53,22 @@
 
 ## 2. 当前完成度
 
-**状态（2026-07-27）**：阶段 **1–17** 已落地；迁移 **`001`–`033`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；**未接**真实柜台。
+**状态（2026-07-28）**：阶段 **1–17** + **18a（行业·ADV 风控）** + **研究证据包** 已落地；迁移 **`001`–`034`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；**未接**真实柜台。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
 | CORE 取数 / 加工 / DQ | ✅ | 日线复权、停牌涨跌停、`can_buy`/`can_sell`、CORE gate |
 | ALPHA 取数 | ✅ | 可插拔；失败不挡 CORE |
 | Universe | ✅ | TOP100 / SECTOR_LEADERS / 指数成分等日快照 |
-| 研究因子 + IC | ✅ | MOM / VAL / FLOW / TECH_*；`research_run.meta_json.report` |
+| 研究因子 + IC + 证据包 | ✅ | MOM / VAL / FLOW / TECH_*；`research --evidence` 年切 OOS |
 | 回测引擎 | ✅ | EW_* / FACTOR_TOP_N；FIFO lot T+1；`close` 成交 |
 | 策略晋升 + 质量门 | ✅ | DRAFT→…→LIVE；IC/DD/样本窗（`032`） |
-| 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；非调仓 hold；Kill Switch；账户合并敞口 |
+| 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；Kill Switch；账户合并敞口；**v2 行业/ADV** |
 | 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；现金约束；执行后可即时过账；**残差 pending 续撮** |
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
 | API + E2E + console | ✅ | `/v1`；`python main.py e2e`；只读台 |
 | 实盘柜台 | ❌ | 仅 paper adapter |
-| 冲击成本 / 行业·ADV 风控 | ⏳ | 阶段 18+ |
+| 冲击成本 / console 写 | ⏳ | 下一优先 |
 
 **开发机约束**：只做短窗冒烟（几天～约 1 个月、TOP100 或单票）。**禁止** ALL_LISTED（6000+）长窗 bulk、禁止本机长历史回填。
 
@@ -80,7 +80,7 @@
 EvoQuantAAA
 ├── README.md                      # 本文件（入口手册）
 ├── ARCHITECTURE_PRINCIPLES.md     # 强制架构与合入清单
-├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 17）
+├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 18a）
 ├── docker-compose.yml
 ├── backend/                       # 业务实现 + 统一 CLI
 │   ├── main.py                    # python main.py …
@@ -93,7 +93,7 @@ EvoQuantAAA
 │   ├── orchestrator/ ops_monitor/ api_gateway/
 │   ├── e2e/ tests/
 ├── database/
-│   ├── migrations/                # 001–033（新文件从 034 起）
+│   ├── migrations/                # 001–034（新文件从 035 起）
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
@@ -284,6 +284,9 @@ python main.py data_quality --scope CORE --start 2026-07-21 --end 2026-07-23 --f
 ```bash
 # 因子 + IC（窗口按本机数据调整）
 python main.py research --factor MOM_20 --universe TOP100 --start 2026-06-01 --end 2026-07-23
+# 研究证据包（多因子 soft 结论 + 年切 OOS）
+python main.py research --evidence --factor ALL --universe TOP100 \
+  --start 2026-06-01 --end 2026-07-23
 python main.py backtest --strategy FACTOR_TOP_N --factor MOM_20 --top-n 20 \
   --universe TOP100 --start 2026-06-01 --end 2026-07-23 --rebalance-days 20
 
@@ -356,11 +359,11 @@ cd frontend/console && python -m http.server 8081
 
 ## 14. 下一优先
 
-阶段 **18+**（详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
+（详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. 行业 / ADV / 换手等事前风控（`risk_engine`）  
-2. 冲击成本、T+1 open 等成交假设（`backtest` + `execution`）  
-3. console 写操作（经 `api_gateway`）  
+1. 冲击成本、T+1 open 等成交假设（`backtest` + `execution`）  
+2. console 写操作（经 `api_gateway`）  
+3. 更长窗 OOS 证据固化（研究侧，非本机 bulk）  
 4. 实盘柜台适配器（更后）
 
 ---
@@ -383,8 +386,18 @@ cd frontend/console && python -m http.server 8081
 | 15 | `031` | 策略 sleeve |
 | 16 | `032` | 晋升质量门 |
 | 17 | `033` | 未成交残差 pending |
+| 18a | `034` | 行业·ADV 风控；研究证据包（并行） |
 
 ---
+
+### 2026-07-28 · 阶段 18a：行业·ADV 风控 + 研究证据包
+- **动机**：纸面链路已通，但事前风控缺流动性/行业集中约束；因子侧缺可复现的多窗证据汇总。
+- **迁移**：`034_risk_adv_industry.sql` → `risk_limits` 扩展列 + 种子 `v2_adv_industry`（`v1_default` 新列 NULL，行为不变）。
+- **模块**：`risk_engine`（ADV/行业硬规则 + 审核时点时补数）、`research_lab`（`evidence.py` + `ResearchService.evidence`）、`main.py` CLI。
+- **行为**：
+  - 风控：`--limits-version v2_adv_industry` 启用行业≤30% NAV、目标市值≤10% 的 20 日 ADV；缺行业/ADV 硬拒绝；账户合并同验。
+  - 证据包：`research --evidence` 多因子 IC + soft 结论 + 默认自然年 OOS；`--compute-first` / `--with-backtest`（回测仅 CLI 编排）；落库 `EVIDENCE_PACK`。
+- **验收**：migrate `034`；风控/证据包 pytest；全量 pytest；文档同步。
 
 ### 2026-07-27 · 阶段 17：未成交残差 pending
 - **动机**：涨跌停/停牌/现金不足等导致当日未对齐目标时，残差被丢弃且 hold 日无新组合可执行。
@@ -622,7 +635,7 @@ cd frontend/console && python -m http.server 8081
 | 文档 | 内容 |
 | --- | --- |
 | [ARCHITECTURE_PRINCIPLES.md](./ARCHITECTURE_PRINCIPLES.md) | 强制架构、不变量、合入清单 |
-| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 17） |
+| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 18a） |
 | [backend/README.md](./backend/README.md) | 后端模块总览与 CLI |
 | [database/README.md](./database/README.md) | 迁移与契约入口 |
 | [database/schema/README.md](./database/schema/README.md) | 表产消登记（权威） |

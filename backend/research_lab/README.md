@@ -8,7 +8,7 @@
 | 生产数据 | 落库表 | 写入时机/说明 |
 | --- | --- | --- |
 | 因子值 | `research_factor_value` | `research` 计算任务 UPSERT（幂等） |
-| 实验运行 | `research_run` | 计算/评估任务元数据 + `meta_json`（`report.ic_*` 供晋升 LIVE 质量门） |
+| 实验运行 | `research_run` | 计算/评估任务元数据 + `meta_json`（`report.ic_*` 供晋升 LIVE 质量门）；证据包 `factor_code=EVIDENCE_PACK` |
 
 迁移：`database/migrations/017_research_lab.sql`。
 
@@ -24,6 +24,23 @@
 | `TECH_MA20_BIAS` | `adj_close / MA_20 - 1` | tech `MA_20` + processed 日线 |
 
 技术指标因子依赖先跑：`data_process --kind tech_indicator`（日更 `daily` 已含 suite=core）。
+
+## 研究证据包
+
+多因子 IC + soft 结论 + 可选自然年 OOS；可选 CLI 编排 `FACTOR_TOP_N` 回测后回写（模块间不互相 import）。
+
+```bash
+cd backend
+# 证据包（默认年切；短窗冒烟）
+python main.py research --evidence --factor ALL --universe TOP100 \
+  --start 2026-06-01 --end 2026-07-23
+# 评估前先 compute；附带回测
+python main.py research --evidence --factor MOM_20 --universe TOP100 \
+  --start 2026-06-01 --end 2026-07-23 --compute-first --with-backtest
+python -m pytest tests/test_research_evidence.py -q
+```
+
+落库：`research_run.factor_code=EVIDENCE_PACK`，`meta_json.mode=evidence`。
 
 ## 协作模块索引（供 AI Agent）
 
@@ -54,9 +71,10 @@ python main.py research --factor TECH_RSI_14 --universe TOP100 --start 2026-06-0
 python main.py research --factor TECH_MA20_BIAS --universe TOP100 --start 2026-06-01 --end 2026-07-23
 # 评估（需已有因子值；t 日因子对 t+1 ret_1d）
 python main.py research --factor TECH_RSI_14 --evaluate --universe TOP100 --start 2026-06-01 --end 2026-07-23
+python main.py research --evidence --factor ALL --universe TOP100 --start 2026-06-01 --end 2026-07-23
 python main.py backtest --strategy FACTOR_TOP_N --factor TECH_RSI_14 --universe TOP100 --start 2026-06-01 --end 2026-07-23
 python -m research_lab.selfcheck
-python -m pytest tests/test_research_factors.py -q
+python -m pytest tests/test_research_factors.py tests/test_research_evidence.py -q
 ```
 
 ## 不变量

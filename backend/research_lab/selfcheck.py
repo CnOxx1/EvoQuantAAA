@@ -112,6 +112,12 @@ def _run_mock() -> None:
     )
     assert len(bias) == 1 and abs(bias[0]["value"] - 0.1) < 1e-9
 
+    from research_lab.evidence import soft_verdict, year_windows
+
+    assert year_windows("2025-12-01", "2026-01-15")[0][0] == "2025"
+    v = soft_verdict({"ic_mean": 0.01, "icir": 0.2, "ic_days": 25})
+    assert v["passed"] is True
+
     print("mock_cases=ok")
 
 

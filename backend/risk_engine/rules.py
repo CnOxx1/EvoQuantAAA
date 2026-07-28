@@ -117,6 +117,76 @@ def evaluate_portfolio(
             }
         )
 
+    # 行业集中度（需 position.industry_code）
+    if limits.max_industry_weight is not None:
+        by_ind: dict[str, float] = {}
+        missing_ind = 0
+        for p in active:
+            val = float(p.get("target_value") or 0.0)
+            if val <= 0:
+                continue
+            ind = str(p.get("industry_code") or "").strip()
+            if not ind:
+                missing_ind += 1
+                continue
+            by_ind[ind] = by_ind.get(ind, 0.0) + val
+        if missing_ind:
+            breaches.append(
+                {
+                    "code": "MISSING_INDUSTRY",
+                    "severity": "error",
+                    "message": f"{missing_ind} 只标的缺少 industry_code",
+                    "value": missing_ind,
+                }
+            )
+        max_iw = float(limits.max_industry_weight)
+        for ind, val in by_ind.items():
+            w = val / nav
+            if w > max_iw + 1e-9:
+                breaches.append(
+                    {
+                        "code": "MAX_INDUSTRY_WEIGHT",
+                        "severity": "error",
+                        "industry_code": ind,
+                        "message": (
+                            f"行业 {ind} 权重 {w:.4f} > max={max_iw}"
+                        ),
+                        "value": w,
+                    }
+                )
+
+    # ADV 参与度：target_value / adv_20
+    if limits.max_adv_participation is not None:
+        max_part = float(limits.max_adv_participation)
+        for p in active:
+            val = float(p.get("target_value") or 0.0)
+            if val <= 0:
+                continue
+            adv = p.get("adv_20")
+            if adv is None or float(adv) <= 0:
+                breaches.append(
+                    {
+                        "code": "MISSING_ADV",
+                        "severity": "error",
+                        "symbol": str(p.get("symbol")),
+                        "message": "缺少有效 ADV（20 日均成交额）",
+                    }
+                )
+                continue
+            part = val / float(adv)
+            if part > max_part + 1e-9:
+                breaches.append(
+                    {
+                        "code": "MAX_ADV_PARTICIPATION",
+                        "severity": "error",
+                        "symbol": str(p.get("symbol")),
+                        "message": (
+                            f"ADV 参与度 {part:.4f} > max={max_part}"
+                        ),
+                        "value": part,
+                    }
+                )
+
     return breaches
 
 
@@ -179,4 +249,82 @@ def evaluate_account_book(
                     "value": w,
                 }
             )
+
+    # 账户合并行业集中度
+    if limits.max_industry_weight is not None:
+        by_ind: dict[str, float] = {}
+        missing_ind = 0
+        for book in position_books:
+            for p in book:
+                val = float(p.get("target_value") or 0.0)
+                if val <= 0:
+                    continue
+                ind = str(p.get("industry_code") or "").strip()
+                if not ind:
+                    missing_ind += 1
+                    continue
+                by_ind[ind] = by_ind.get(ind, 0.0) + val
+        if missing_ind:
+            breaches.append(
+                {
+                    "code": "ACCOUNT_MISSING_INDUSTRY",
+                    "severity": "error",
+                    "message": f"账户合并 {missing_ind} 条腿缺少 industry_code",
+                    "value": missing_ind,
+                }
+            )
+        max_iw = float(limits.max_industry_weight)
+        for ind, val in by_ind.items():
+            w = val / account_nav
+            if w > max_iw + 1e-9:
+                breaches.append(
+                    {
+                        "code": "ACCOUNT_MAX_INDUSTRY_WEIGHT",
+                        "severity": "error",
+                        "industry_code": ind,
+                        "message": (
+                            f"账户合并行业 {ind} 权重 {w:.4f} > max={max_iw}"
+                        ),
+                        "value": w,
+                    }
+                )
+
+    # 账户合并 ADV：同票市值合计 / ADV
+    if limits.max_adv_participation is not None:
+        max_part = float(limits.max_adv_participation)
+        adv_by_sym: dict[str, float] = {}
+        for book in position_books:
+            for p in book:
+                sym = str(p.get("symbol") or "")
+                adv = p.get("adv_20")
+                if not sym or adv is None or float(adv) <= 0:
+                    continue
+                # 取首次有效 ADV（同标的应一致）
+                adv_by_sym.setdefault(sym, float(adv))
+        for sym, val in by_sym.items():
+            adv = adv_by_sym.get(sym)
+            if adv is None or adv <= 0:
+                breaches.append(
+                    {
+                        "code": "ACCOUNT_MISSING_ADV",
+                        "severity": "error",
+                        "symbol": sym,
+                        "message": "账户合并缺少有效 ADV",
+                    }
+                )
+                continue
+            part = val / adv
+            if part > max_part + 1e-9:
+                breaches.append(
+                    {
+                        "code": "ACCOUNT_MAX_ADV_PARTICIPATION",
+                        "severity": "error",
+                        "symbol": sym,
+                        "message": (
+                            f"账户合并 ADV 参与度 {part:.4f} > max={max_part}"
+                        ),
+                        "value": part,
+                    }
+                )
+
     return breaches

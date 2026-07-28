@@ -117,8 +117,99 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
 
 def cmd_research(args: argparse.Namespace) -> int:
-    from research_lab.models import FACTOR_CODES, ResearchRequest
+    from research_lab.models import FACTOR_CODES, EvidenceRequest, ResearchRequest
     from research_lab.service import ResearchService
+
+    if getattr(args, "evidence", False):
+        codes = list(FACTOR_CODES) if args.factor == "ALL" else [args.factor]
+        ev = ResearchService().evidence(
+            EvidenceRequest(
+                start=args.start,
+                end=args.end,
+                universe_code=args.universe,
+                factor_type=args.factor_type,
+                factor_codes=codes,
+                require_dq=not args.no_dq_check,
+                compute_first=bool(getattr(args, "compute_first", False)),
+                year_split=not bool(getattr(args, "no_year_split", False)),
+                job_id=args.job_id,
+            )
+        )
+        print(
+            f"status={ev.status} run_id={ev.run_id} universe={ev.universe_code} "
+            f"mode=evidence"
+        )
+        if ev.message:
+            print(ev.message)
+        if ev.status != "committed":
+            return 2
+
+        if getattr(args, "with_backtest", False):
+            from backtest.models import BacktestRequest
+            from backtest.service import BacktestService
+            from research_lab.evidence import format_evidence_pack
+
+            bt_map: dict = {}
+            for code in codes:
+                row = (ev.pack.get("factors") or {}).get(code) or {}
+                if row.get("status") != "committed":
+                    continue
+                bt = BacktestService().run(
+                    BacktestRequest(
+                        strategy_code="FACTOR_TOP_N",
+                        start=args.start,
+                        end=args.end,
+                        universe_code=args.universe,
+                        factor_type=args.factor_type,
+                        cost_version=getattr(
+                            args, "cost_version", "v1_ashare_default"
+                        ),
+                        require_dq=not args.no_dq_check,
+                        rebalance_days=int(
+                            getattr(args, "rebalance_days", 20) or 20
+                        ),
+                        research_factor=code,
+                        top_n=int(getattr(args, "top_n", 20) or 20),
+                        job_id=args.job_id,
+                    )
+                )
+                bt_map[code] = {
+                    "status": bt.status,
+                    "run_id": bt.run_id,
+                    "total_return": bt.total_return,
+                    "max_drawdown": bt.max_drawdown,
+                    "benchmark_return": bt.benchmark_return,
+                    "trade_count": bt.trade_count,
+                    "final_nav": bt.final_nav,
+                    "message": bt.message,
+                }
+                print(
+                    f"backtest factor={code} status={bt.status} run={bt.run_id} "
+                    f"ret={bt.total_return} mdd={bt.max_drawdown}"
+                )
+            if bt_map:
+                ResearchService().attach_backtests_to_evidence(
+                    run_id=ev.run_id, backtests=bt_map
+                )
+                import json
+
+                from shared.db import get_conn
+
+                with get_conn() as conn:
+                    row = conn.execute(
+                        "SELECT meta_json FROM research_run WHERE run_id=?",
+                        (ev.run_id,),
+                    ).fetchone()
+                if row:
+                    meta = row["meta_json"]
+                    if isinstance(meta, str):
+                        meta = json.loads(meta)
+                    print(
+                        format_evidence_pack(
+                            meta if isinstance(meta, dict) else {}
+                        )
+                    )
+        return 0
 
     factors = list(FACTOR_CODES) if args.factor == "ALL" else [args.factor]
     exit_code = 0
@@ -2604,6 +2695,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="对已落库因子做 RankIC / 5 分位分层（t→t+1）",
     )
     p_rs.add_argument(
+        "--evidence",
+        action="store_true",
+        help="研究证据包：多因子 IC + soft 结论 + 可选年切 OOS / 回测",
+    )
+    p_rs.add_argument(
+        "--no-year-split",
+        action="store_true",
+        help="证据包：关闭按自然年切分的 OOS IC（默认开启年切）",
+    )
+    p_rs.add_argument(
+        "--compute-first",
+        action="store_true",
+        help="证据包：评估前先 compute 因子",
+    )
+    p_rs.add_argument(
+        "--with-backtest",
+        action="store_true",
+        help="证据包：对 soft 通过/已评估因子跑 FACTOR_TOP_N（扣 cost_params）",
+    )
+    p_rs.add_argument("--top-n", type=int, default=20, help="证据包回测 top_n")
+    p_rs.add_argument(
+        "--rebalance-days", type=int, default=20, help="证据包回测调仓间隔"
+    )
+    p_rs.add_argument(
+        "--cost-version", default="v1_ashare_default", help="证据包回测费用版本"
+    )
+    p_rs.add_argument(
         "--no-dq-check",
         action="store_true",
         help="调试用：跳过 dq_gate（生产勿用）",
@@ -2773,7 +2891,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_rk_rev.add_argument("--as-of", default=None, help="YYYY-MM-DD")
     p_rk_rev.add_argument("--account", default=None)
-    p_rk_rev.add_argument("--limits-version", default="v1_default")
+    p_rk_rev.add_argument(
+        "--limits-version",
+        default="v1_default",
+        help="risk_limits.version（v1_default 或 v2_adv_industry）",
+    )
     p_rk_rev.add_argument("--force", action="store_true", help="已审过也可重审")
     p_rk_rev.add_argument("--actor", default="cli")
     p_rk_rev.add_argument("--job-id", default=None)

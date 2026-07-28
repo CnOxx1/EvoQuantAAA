@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–17 已完成**（迁移 `001`–`033`）。纸面生产全链路可用；晋升含质量门；未成交残差可续撮。  
-**下一优先**：行业·ADV 风控 / 冲击成本 / console 写操作（见阶段 17 备注）。  
+**当前进度**：阶段 **1–17 已完成**；**研究证据包 + 阶段 18a（行业·ADV 风控）已落地**（迁移 `001`–`034`）。  
+**下一优先**：冲击成本模型 / console 写操作 / 更长窗 OOS 证据固化。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `033`（execution_pending），**新迁移从 `034` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `034`（risk ADV/industry），**新迁移从 `035` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -67,9 +67,13 @@
 | 策略 sleeve | 同账户持仓按 strategy_version 隔离；执行后即过账；非调仓 hold；回测 lot T+1（迁移 `031`） |
 | 晋升质量门 | IC / 回撤 / 样本窗；`promotion_gate_*`（迁移 `032`） |
 | 未成交残差 | `execution_pending` 下日续撮（迁移 `033`） |
+| 行业·ADV 风控 | `risk_limits` v2 + ADV/行业硬规则（迁移 `034`） |
+| 研究证据包 | `research --evidence`（年切 OOS + soft 结论；可选回测） |
 | E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
 
-> **阶段 17（2026-07-27）**：未成交残差 pending——意图−成交落 `execution_pending`；`resume-pending` 续撮；schedule 先续撮再跑 approved；新调仓 supersede 旧 open。下一优先：行业·ADV 风控 / 冲击成本。
+> **阶段 18a（2026-07-28）**：风控 ADV 参与度与行业集中度——`risk_limits` 扩展 + 种子 `v2_adv_industry`；审核时点时补行业/20 日 ADV；账户合并同验。研究证据包并行落地（非独立阶段号）。下一优先：冲击成本 / console 写。
+>
+> **阶段 17（2026-07-27）**：未成交残差 pending——意图−成交落 `execution_pending`；`resume-pending` 续撮；schedule 先续撮再跑 approved；新调仓 supersede 旧 open。
 >
 > **阶段 16（2026-07-27）**：晋升质量门——BACKTESTED/PAPER/LIVE 读 backtest +（LIVE）research IC；拒绝则落 `promotion_gate_result`；`--skip-gates` 须 reason。
 >
@@ -424,6 +428,29 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：迁移 `033`；残差单测绿；pytest 全绿；相关 MD / 根 changelog 同步。
 
+---
+
+## 阶段 18a · 行业集中度与 ADV 参与度（risk）
+
+### 任务 18a.1 限额扩展与审核钩子
+
+**要求**：
+1. 迁移 `034`：`risk_limits` 增加 `max_industry_weight` / `max_adv_participation` / `adv_lookback_days` / `industry_standard`；种子 `v2_adv_industry`（`v1_default` 新列 NULL，行为不变）
+2. ADV = as_of 及以前 N 日 `processed_equity_bar_1d.amount` 均值；行业优先 `universe_snapshot_member`，否则 `raw_industry_class` 点时
+3. `evaluate_portfolio` / `evaluate_account_book` 硬拒绝：`MAX_INDUSTRY_WEIGHT` / `MAX_ADV_PARTICIPATION`（及账户级、缺数据码）
+4. CLI `--limits-version v2_adv_industry`；pytest / selfcheck / README 同步
+
+**验收**：迁移 `034`；风控规则单测绿；pytest 全绿；文档同步。
+
+### 任务 18a.2 研究证据包（并行）
+
+**要求**：
+1. `research_lab/evidence.py`：年切窗、soft 结论、OOS 摘要、可打印 pack
+2. `research --evidence`：多因子 IC + 默认年切；`--compute-first` / `--no-year-split` / `--with-backtest`（回测仅经 `main.py` 编排）
+3. 落库 `research_run`（`factor_code=EVIDENCE_PACK`）；pytest 覆盖纯函数
+
+**验收**：证据包 CLI 可用；相关单测绿；research_lab README 同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -457,3 +484,5 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 15 | 15.1 sleeve + hold + lot T+1 | 策略持仓隔离 / 即过账 / 非调仓 hold / 回测对齐 |
 | 16 | 16.1 promotion gates | IC/DD/样本窗门槛；拒绝可审计 |
 | 17 | 17.1 execution pending | 残差落库 / 续撮 / schedule 接入 |
+| 18a | 18a.1 ADV/行业风控 | `v2_adv_industry` 限额 + 硬规则 |
+| 18a | 18a.2 研究证据包 | `research --evidence` |

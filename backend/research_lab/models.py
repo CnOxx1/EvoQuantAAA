@@ -33,13 +33,25 @@ class ResearchRequest:
 
 
 @dataclass
-class ResearchResult:
-    status: str
-    run_id: str
-    factor_code: str
-    universe_code: str
+class EvidenceRequest:
     start: str
     end: str
-    row_count: int = 0
+    universe_code: str = "TOP100"
+    factor_type: str = "qfq"
+    factor_codes: list[str] = field(default_factory=list)
+    require_dq: bool = True
+    compute_first: bool = False
+    year_split: bool = True
+    job_id: str | None = None
+    soft_gates: dict[str, Any] | None = None
+
+
+@dataclass
+class EvidenceResult:
+    status: str
+    run_id: str = ""
+    universe_code: str = ""
+    start: str = ""
+    end: str = ""
     message: str = ""
-    meta: dict[str, Any] = field(default_factory=dict)
+    pack: dict[str, Any] = field(default_factory=dict)

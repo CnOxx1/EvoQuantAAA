@@ -81,6 +81,57 @@ def _run_mock() -> None:
         limits=limits,
     )
     assert any(b["code"] == "LOT_SIZE" for b in odd_lot)
+
+    # 18a：行业 / ADV
+    ind_ok = evaluate_portfolio(
+        positions=[
+            {
+                "symbol": "A",
+                "target_weight": 0.1,
+                "target_shares": 1000,
+                "target_value": 10000,
+                "can_buy": 1,
+                "industry_code": "801010",
+                "adv_20": 500_000,
+            }
+        ],
+        nav=100_000,
+        invested_value=10_000,
+        kill_switch_on=False,
+        limits=RiskLimits(
+            max_industry_weight=0.30,
+            max_adv_participation=0.10,
+        ),
+    )
+    assert ind_ok == []
+
+    ind_heavy = evaluate_portfolio(
+        positions=[
+            {
+                "symbol": "A",
+                "target_weight": 0.2,
+                "target_shares": 1000,
+                "target_value": 20000,
+                "can_buy": 1,
+                "industry_code": "801010",
+                "adv_20": 500_000,
+            },
+            {
+                "symbol": "B",
+                "target_weight": 0.15,
+                "target_shares": 500,
+                "target_value": 15000,
+                "can_buy": 1,
+                "industry_code": "801010",
+                "adv_20": 500_000,
+            },
+        ],
+        nav=100_000,
+        invested_value=35_000,
+        kill_switch_on=False,
+        limits=RiskLimits(max_industry_weight=0.30, max_adv_participation=0.10),
+    )
+    assert any(b["code"] == "MAX_INDUSTRY_WEIGHT" for b in ind_heavy)
     print("mock_cases=ok")
 
 

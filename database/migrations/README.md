@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`033`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`034`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -40,6 +40,7 @@
 | `031_strategy_sleeve.sql` | `ledger_sleeve_position`；`ledger_lot.strategy_version` |
 | `032_promotion_gates.sql` | `promotion_gate_params` / `promotion_gate_result`（晋升质量门） |
 | `033_execution_pending.sql` | `execution_pending` / `execution_pending_event`；`execution_run.run_kind` |
+| `034_risk_adv_industry.sql` | `risk_limits` 行业/ADV 列 + 种子 `v2_adv_industry` |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

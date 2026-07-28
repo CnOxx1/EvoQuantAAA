@@ -12,20 +12,131 @@ class RiskRepository:
         with get_conn() as conn:
             row = conn.execute(
                 """
-                SELECT version, max_single_weight, max_names, max_gross_exposure, min_names
+                SELECT version, max_single_weight, max_names, max_gross_exposure, min_names,
+                       max_industry_weight, max_adv_participation, adv_lookback_days,
+                       industry_standard
                 FROM risk_limits WHERE version=?
                 """,
                 (version,),
             ).fetchone()
         if not row:
             raise RuntimeError(f"risk_limits 不存在: {version}")
+        d = dict(row)
         return RiskLimits(
-            version=str(row["version"]),
-            max_single_weight=float(row["max_single_weight"]),
-            max_names=int(row["max_names"]),
-            max_gross_exposure=float(row["max_gross_exposure"]),
-            min_names=int(row["min_names"] or 1),
+            version=str(d["version"]),
+            max_single_weight=float(d["max_single_weight"]),
+            max_names=int(d["max_names"]),
+            max_gross_exposure=float(d["max_gross_exposure"]),
+            min_names=int(d["min_names"] or 1),
+            max_industry_weight=(
+                float(d["max_industry_weight"])
+                if d.get("max_industry_weight") is not None
+                else None
+            ),
+            max_adv_participation=(
+                float(d["max_adv_participation"])
+                if d.get("max_adv_participation") is not None
+                else None
+            ),
+            adv_lookback_days=int(d.get("adv_lookback_days") or 20),
+            industry_standard=str(d.get("industry_standard") or "SW2021"),
         )
+
+    def load_adv_map(
+        self,
+        *,
+        symbols: list[str],
+        as_of: str,
+        lookback_days: int = 20,
+        factor_type: str = "qfq",
+    ) -> dict[str, float]:
+        """as_of 及之前 lookback 个交易日的平均成交额。"""
+        if not symbols:
+            return {}
+        lookback = max(1, int(lookback_days))
+        with get_conn() as conn:
+            # 取 as_of 及之前的交易日序列
+            date_rows = conn.execute(
+                """
+                SELECT DISTINCT trade_date FROM processed_equity_bar_1d
+                WHERE trade_date <= ? AND factor_type=?
+                ORDER BY trade_date DESC
+                LIMIT ?
+                """,
+                (as_of[:10], factor_type, lookback),
+            ).fetchall()
+            dates = [str(r["trade_date"])[:10] for r in date_rows]
+            if not dates:
+                return {}
+            placeholders = ",".join("?" * len(symbols))
+            date_ph = ",".join("?" * len(dates))
+            rows = conn.execute(
+                f"""
+                SELECT symbol, AVG(amount) AS adv
+                FROM processed_equity_bar_1d
+                WHERE factor_type=?
+                  AND trade_date IN ({date_ph})
+                  AND symbol IN ({placeholders})
+                  AND amount IS NOT NULL AND amount > 0
+                GROUP BY symbol
+                """,
+                (factor_type, *dates, *symbols),
+            ).fetchall()
+        return {str(r["symbol"]): float(r["adv"]) for r in rows if r["adv"] is not None}
+
+    def load_industry_map(
+        self,
+        *,
+        symbols: list[str],
+        as_of: str,
+        standard: str = "SW2021",
+        universe_code: str | None = None,
+    ) -> dict[str, str]:
+        """优先 universe 快照成员行业；否则 raw_industry_class 点时。"""
+        out: dict[str, str] = {}
+        if not symbols:
+            return out
+        placeholders = ",".join("?" * len(symbols))
+        with get_conn() as conn:
+            if universe_code:
+                snap = conn.execute(
+                    """
+                    SELECT universe_snapshot_id FROM universe_snapshot
+                    WHERE universe_code=? AND as_of_date<=? AND status='committed'
+                    ORDER BY as_of_date DESC
+                    LIMIT 1
+                    """,
+                    (universe_code, as_of[:10]),
+                ).fetchone()
+                if snap:
+                    rows = conn.execute(
+                        f"""
+                        SELECT symbol, industry_code FROM universe_snapshot_member
+                        WHERE universe_snapshot_id=?
+                          AND symbol IN ({placeholders})
+                          AND industry_code IS NOT NULL AND industry_code <> ''
+                        """,
+                        (str(snap["universe_snapshot_id"]), *symbols),
+                    ).fetchall()
+                    for r in rows:
+                        out[str(r["symbol"])] = str(r["industry_code"])
+            missing = [s for s in symbols if s not in out]
+            if missing:
+                mph = ",".join("?" * len(missing))
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT ON (symbol) symbol, industry_code
+                    FROM raw_industry_class
+                    WHERE standard=? AND effective_date<=?
+                      AND symbol IN ({mph})
+                      AND industry_code IS NOT NULL AND industry_code <> ''
+                    ORDER BY symbol, effective_date DESC
+                    """,
+                    (standard, as_of[:10], *missing),
+                ).fetchall()
+                for r in rows:
+                    out[str(r["symbol"])] = str(r["industry_code"])
+        return out
 
     def load_lot_size(self, cost_version: str) -> int:
         with get_conn() as conn:

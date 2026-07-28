@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from research_lab.evaluate import evaluate_factor, format_eval_report
+from research_lab.evidence import (
+    format_evidence_pack,
+    soft_verdict,
+    summarize_oos,
+    year_windows,
+)
 from research_lab.factors import (
     compute_flow_net_5,
     compute_mom_20,
@@ -13,7 +19,13 @@ from research_lab.factors import (
     compute_tech_ma20_bias,
     compute_val_pe_pct,
 )
-from research_lab.models import FACTOR_CODES, ResearchRequest, ResearchResult
+from research_lab.models import (
+    FACTOR_CODES,
+    EvidenceRequest,
+    EvidenceResult,
+    ResearchRequest,
+    ResearchResult,
+)
 from research_lab.repository import ResearchRepository
 
 logger = logging.getLogger(__name__)
@@ -316,3 +328,191 @@ class ResearchService:
             meta=meta,
             message=meta["report_text"],
         )
+
+    def evidence(self, request: EvidenceRequest) -> EvidenceResult:
+        """
+        多因子证据包：全样本 IC + 可选年切 OOS；结果写入一条 research_run
+        （factor_code=EVIDENCE_PACK, meta.mode=evidence）。
+        回测由 CLI 编排后经 attach_backtests 合并，避免跨模块 import。
+        """
+        start, end = request.start[:10], request.end[:10]
+        run_id = f"re_{uuid.uuid4().hex}"
+        created = _utcnow()
+        codes = list(request.factor_codes) or list(FACTOR_CODES)
+
+        if request.require_dq:
+            gate = self.repo.require_dq_passed(
+                start=start, end=end, factor_type=request.factor_type
+            )
+            if not gate or gate.get("status") != "passed":
+                return EvidenceResult(
+                    status="failed",
+                    run_id=run_id,
+                    universe_code=request.universe_code,
+                    start=start,
+                    end=end,
+                    message="dq_gate 未 passed（可用 --no-dq-check 仅调试）",
+                )
+
+        factors_out: dict[str, Any] = {}
+        any_ok = False
+        for code in codes:
+            if code not in FACTOR_CODES:
+                factors_out[code] = {
+                    "status": "invalid",
+                    "message": f"不支持的因子: {code}",
+                }
+                continue
+            req = ResearchRequest(
+                factor_code=code,  # type: ignore[arg-type]
+                start=start,
+                end=end,
+                universe_code=request.universe_code,
+                factor_type=request.factor_type,
+                require_dq=False,  # 已在包级检查
+                job_id=request.job_id,
+            )
+            if request.compute_first:
+                comp = self.run(req)
+                if comp.status != "committed":
+                    factors_out[code] = {
+                        "status": "failed",
+                        "message": f"compute failed: {comp.message}",
+                        "compute_run_id": comp.run_id,
+                    }
+                    continue
+
+            ev = self.evaluate(req)
+            row: dict[str, Any] = {
+                "status": ev.status,
+                "evaluate_run_id": ev.run_id,
+                "message": ev.message if ev.status != "committed" else "",
+            }
+            if ev.status == "committed":
+                any_ok = True
+                report = (ev.meta or {}).get("report") or {}
+                row["report"] = report
+                row["verdict"] = soft_verdict(report, request.soft_gates)
+                if request.year_split:
+                    snapshot_id, symbols = self.repo.load_universe_symbols(
+                        universe_code=request.universe_code,
+                        as_of=start,
+                        as_of_end=end,
+                    )
+                    factor_rows = self.repo.load_factor_values(
+                        factor_code=code,
+                        universe_code=request.universe_code,
+                        start=start,
+                        end=end,
+                        symbols=symbols,
+                    )
+                    bars = self.repo.load_equity_bars(
+                        start=start,
+                        end=end,
+                        symbols=symbols,
+                        factor_type=request.factor_type,
+                        lookback_calendar_days=5,
+                    )
+                    by_year: dict[str, Any] = {}
+                    # bars 按日期排序后，年窗末日后取若干交易日供 t→t+1
+                    bar_dates_sorted = sorted(
+                        {str(r["trade_date"])[:10] for r in bars}
+                    )
+                    for ylabel, w0, w1 in year_windows(start, end):
+                        f_slice = [
+                            r
+                            for r in factor_rows
+                            if w0 <= str(r["trade_date"])[:10] <= w1
+                        ]
+                        post = [d for d in bar_dates_sorted if d > w1][:5]
+                        b_hi = post[-1] if post else w1
+                        b_slice = [
+                            r
+                            for r in bars
+                            if w0 <= str(r["trade_date"])[:10] <= b_hi
+                        ]
+                        yrep = evaluate_factor(
+                            factor_rows=f_slice, ret_rows=b_slice
+                        )
+                        by_year[ylabel] = {
+                            "start": w0,
+                            "end": w1,
+                            "report": yrep,
+                            "universe_snapshot_id": snapshot_id,
+                        }
+                    row["oos"] = {
+                        "by_year": by_year,
+                        "summary": summarize_oos(by_year),
+                    }
+            factors_out[code] = row
+
+        pack: dict[str, Any] = {
+            "mode": "evidence",
+            "universe_code": request.universe_code,
+            "start": start,
+            "end": end,
+            "factor_type": request.factor_type,
+            "year_split": request.year_split,
+            "with_backtest": False,
+            "compute_first": request.compute_first,
+            "factors": factors_out,
+            "job_id": request.job_id,
+        }
+        pack["report_text"] = format_evidence_pack(pack)
+        status = "committed" if any_ok else "failed"
+        self.repo.create_run(
+            {
+                "run_id": run_id,
+                "factor_code": "EVIDENCE_PACK",
+                "universe_code": request.universe_code,
+                "start_date": start,
+                "end_date": end,
+                "status": status,
+                "meta": pack,
+                "created_at": created,
+            }
+        )
+        return EvidenceResult(
+            status=status,
+            run_id=run_id,
+            universe_code=request.universe_code,
+            start=start,
+            end=end,
+            message=pack["report_text"],
+            pack=pack,
+        )
+
+    def attach_backtests_to_evidence(
+        self, *, run_id: str, backtests: dict[str, dict[str, Any]]
+    ) -> None:
+        """CLI 跑完 FACTOR_TOP_N 后回写 evidence pack。"""
+        import json
+
+        from shared.db import get_conn
+
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT meta_json FROM research_run WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if not row:
+                return
+            meta = row["meta_json"]
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except json.JSONDecodeError:
+                    meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            factors = meta.get("factors") or {}
+            for code, bt in backtests.items():
+                if code in factors and isinstance(factors[code], dict):
+                    factors[code]["backtest"] = bt
+            meta["factors"] = factors
+            meta["with_backtest"] = True
+            meta["report_text"] = format_evidence_pack(meta)
+            conn.execute(
+                "UPDATE research_run SET meta_json=? WHERE run_id=?",
+                (json.dumps(meta, ensure_ascii=False), run_id),
+            )
