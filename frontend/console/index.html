@@ -13,8 +13,8 @@
   <div class="atmosphere" aria-hidden="true"></div>
   <header class="hero">
     <p class="brand">EvoQuantAAA</p>
-    <h1>生产只读台</h1>
-    <p class="lede">经 api_gateway 查看策略、Kill Switch、组合与账本。不直连数据库。</p>
+    <h1>运维控制台</h1>
+    <p class="lede">经 api_gateway 查询与操作：Kill Switch、策略晋升、风控审核。不直连数据库。</p>
   </header>
 
   <section class="config" aria-label="连接">
@@ -31,16 +31,81 @@
   <main>
     <section>
       <h2>Kill Switch</h2>
+      <form id="killForm" class="action-form" autocomplete="off">
+        <label>Scope
+          <input id="killScope" type="text" value="GLOBAL" required />
+        </label>
+        <label>原因
+          <input id="killReason" type="text" placeholder="可选" />
+        </label>
+        <div class="btn-row">
+          <button type="submit" name="action" value="on" class="cta danger">开启 Kill</button>
+          <button type="submit" name="action" value="off" class="cta">解除 Kill</button>
+        </div>
+      </form>
       <pre id="killBox" class="pane">—</pre>
     </section>
+
     <section>
-      <h2>LIVE / PAPER 策略</h2>
+      <h2>策略晋升</h2>
+      <form id="promoteForm" class="action-form" autocomplete="off">
+        <label>strategy_version
+          <input id="promoteVersion" type="text" placeholder="sv_…" required />
+        </label>
+        <label>目标状态
+          <select id="promoteTo">
+            <option value="BACKTESTED">BACKTESTED</option>
+            <option value="PAPER">PAPER</option>
+            <option value="LIVE">LIVE</option>
+            <option value="RETIRED">RETIRED</option>
+          </select>
+        </label>
+        <label>backtest_run（BACKTESTED 常用）
+          <input id="promoteBacktest" type="text" placeholder="bt_…" />
+        </label>
+        <label>原因
+          <input id="promoteReason" type="text" placeholder="可选；跳过质量门时必填" />
+        </label>
+        <label class="check">
+          <input id="promoteSkipGates" type="checkbox" />
+          跳过质量门（危险，须填原因）
+        </label>
+        <div class="btn-row">
+          <button type="submit" class="cta">提交晋升</button>
+        </div>
+      </form>
       <pre id="stratBox" class="pane">—</pre>
     </section>
+
     <section>
-      <h2>最近组合</h2>
+      <h2>风控审核</h2>
+      <form id="reviewForm" class="action-form" autocomplete="off">
+        <label>portfolio_id
+          <input id="reviewPortfolio" type="text" placeholder="pf_…" />
+        </label>
+        <label>as_of（批量 draft）
+          <input id="reviewAsOf" type="date" />
+        </label>
+        <label class="check">
+          <input id="reviewDrafts" type="checkbox" />
+          审核当日全部 draft（需 as_of）
+        </label>
+        <label class="check">
+          <input id="reviewForce" type="checkbox" />
+          force 重审
+        </label>
+        <div class="btn-row">
+          <button type="submit" class="cta">提交审核</button>
+        </div>
+      </form>
       <pre id="pfBox" class="pane">—</pre>
     </section>
+
+    <section>
+      <h2>写操作结果</h2>
+      <pre id="actionBox" class="pane">尚未执行写操作</pre>
+    </section>
+
     <section>
       <h2>账本 paper_default</h2>
       <pre id="ledgerBox" class="pane">—</pre>
@@ -54,6 +119,7 @@
   <footer>
     <p>启动网关：<code>cd backend && python main.py gateway --port 8080</code></p>
     <p>本页：<code>cd frontend/console && python -m http.server 8081</code> → http://127.0.0.1:8081</p>
+    <p>写操作经 POST <code>/v1/risk/kill</code> · <code>/v1/strategies/&#123;id&#125;/promote</code> · <code>/v1/risk/review</code>，审计入 <code>api_audit_log</code>。</p>
   </footer>
   <script src="./app.js"></script>
 </body>

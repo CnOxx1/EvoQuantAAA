@@ -97,6 +97,51 @@ body {
 
 .cta:hover { filter: brightness(1.05); }
 
+.cta.danger {
+  background: var(--accent-2);
+}
+
+.action-form {
+  display: grid;
+  gap: 0.65rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  margin: 0 0 0.75rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.action-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.action-form label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  grid-column: 1 / -1;
+}
+
+.action-form input[type="text"],
+.action-form input[type="date"],
+.action-form select {
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  color: var(--ink);
+}
+
+.action-form .btn-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .status {
   width: 100%;
   margin: 0;

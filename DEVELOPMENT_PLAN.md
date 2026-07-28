@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–17**、**18a（行业·ADV）**、**18b（冲击成本）**、研究证据包已落地（迁移 `001`–`035`）。  
-**下一优先**：console 写操作 / 更长窗 OOS 证据固化 / 实盘柜台（更后）。  
+**当前进度**：阶段 **1–17**、**18a/18b**、研究证据包、**console 写操作**已落地（迁移 `001`–`035`，写操作无新迁移）。  
+**下一优先**：更长窗 OOS 证据固化 / 实盘柜台（更后）。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -70,9 +70,12 @@
 | 行业·ADV 风控 | `risk_limits` v2 + ADV/行业硬规则（迁移 `034`） |
 | 研究证据包 | `research --evidence`（年切 OOS + soft 结论；可选回测） |
 | 冲击成本 | `cost_params` v2_sqrt_impact；回测/纸面共用（迁移 `035`） |
-| E2E + console | `python main.py e2e`；`frontend/console` 只读台 |
+| console 写 | Kill / 晋升 / 风控审核经 gateway（无新迁移） |
+| E2E + console | `python main.py e2e`；`frontend/console` |
 
-> **阶段 18b（2026-07-28）**：成交冲击——`cost_params` 扩展 `impact_model/coef/adv_lookback`；种子 `v2_sqrt_impact`；`shared/impact.py` 纯函数；回测与纸面执行按名义/ADV 附加滑点。下一优先：console 写。
+> **console 写（2026-07-28）**：运维台 POST Kill / promote / review；跳过质量门须原因；审计仍走 `api_audit_log`。下一优先：长窗 OOS / 实盘柜台。
+>
+> **阶段 18b（2026-07-28）**：成交冲击——`cost_params` 扩展 `impact_model/coef/adv_lookback`；种子 `v2_sqrt_impact`；`shared/impact.py` 纯函数；回测与纸面执行按名义/ADV 附加滑点。
 >
 > **阶段 18a（2026-07-28）**：风控 ADV 参与度与行业集中度——`risk_limits` 扩展 + 种子 `v2_adv_industry`；审核时点时补行业/20 日 ADV；账户合并同验。研究证据包并行落地（非独立阶段号）。
 >
@@ -468,6 +471,19 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：迁移 `035`；冲击单测绿；pytest 全绿；文档同步。
 
+---
+
+## console 写操作 · 运维台（frontend）
+
+### 任务 C.1 Kill / 晋升 / 风控审核表单
+
+**要求**：
+1. `frontend/console`：POST `/v1/risk/kill`、`/v1/strategies/{id}/promote`、`/v1/risk/review`
+2. 复用现有 Bearer Token；开启 Kill / 跳过质量门需确认；跳过门须填原因
+3. 无新迁移（审计表 `028` 已有）；更新 console / 根 README / 任务书
+
+**验收**：静态页可提交写操作；文档同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -504,3 +520,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 18a | 18a.1 ADV/行业风控 | `v2_adv_industry` 限额 + 硬规则 |
 | 18a | 18a.2 研究证据包 | `research --evidence` |
 | 18b | 18b.1 sqrt ADV 冲击 | `v2_sqrt_impact`；回测/执行共用 |
+| C | C.1 console 写 | Kill / 晋升 / review UI |

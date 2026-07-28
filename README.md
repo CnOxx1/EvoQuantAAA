@@ -47,13 +47,13 @@
 | 研究与生产隔离 | 实验不可直连执行；须 `strategy_registry` 晋升 + 质量门 |
 | 多 Agent 可协作 | 一 Agent 一模块；只读对方 README 与 `database/` 契约 |
 
-**非目标（当前）**：Tick/L2、宏观全量、ML 因子框架、真实券商柜台直连、前端完整产品化（仅 [`frontend/console`](./frontend/console/README.md) 只读台）。
+**非目标（当前）**：Tick/L2、宏观全量、ML 因子框架、真实券商柜台直连、前端完整产品化（[`frontend/console`](./frontend/console/README.md) 为运维台，非完整产品）。
 
 ---
 
 ## 2. 当前完成度
 
-**状态（2026-07-28）**：阶段 **1–17** + **18a（行业·ADV）** + **18b（冲击成本）** + **研究证据包** 已落地；迁移 **`001`–`035`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；**未接**真实柜台。
+**状态（2026-07-28）**：阶段 **1–17** + **18a/18b** + **研究证据包** + **console 写操作** 已落地；迁移 **`001`–`035`**。纸面全链路可跑；晋升含质量门；未成交残差可续撮；运维台可 Kill/晋升/审核；**未接**真实柜台。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
@@ -66,9 +66,9 @@
 | 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；Kill Switch；账户合并敞口；**v2 行业/ADV** |
 | 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；冲击与回测同口径；残差 pending 续撮 |
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
-| API + E2E + console | ✅ | `/v1`；`python main.py e2e`；只读台 |
+| API + E2E + console | ✅ | `/v1`；`python main.py e2e`；运维台含写操作 |
 | 实盘柜台 | ❌ | 仅 paper adapter |
-| console 写操作 | ⏳ | 下一优先 |
+| 长窗 OOS 证据固化 | ⏳ | 下一优先（非本机 bulk） |
 
 **开发机约束**：只做短窗冒烟（几天～约 1 个月、TOP100 或单票）。**禁止** ALL_LISTED（6000+）长窗 bulk、禁止本机长历史回填。
 
@@ -97,7 +97,7 @@ EvoQuantAAA
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
-│   └── console/                   # 只读运维台（经 api_gateway）
+│   └── console/                   # 运维台（经 api_gateway；含写操作）
 └── scripts/
 ```
 
@@ -174,7 +174,7 @@ daily(CORE±ALPHA)
 | 运维 | ops_monitor | `backend/ops_monitor/` | 告警、coverage | [link](./backend/ops_monitor/README.md) |
 | API | api_gateway | `backend/api_gateway/` | `/v1` BFF | [link](./backend/api_gateway/README.md) |
 | 回归 | e2e / tests | `backend/e2e/` `backend/tests/` | 短窗 E2E；pytest | [e2e](./backend/e2e/README.md) |
-| 前端 | console | `frontend/console/` | 只读台 | [frontend](./frontend/README.md) |
+| 前端 | console | `frontend/console/` | 运维台（Kill/晋升/审核） | [frontend](./frontend/README.md) |
 
 废弃目录名（勿用）：`research_factor`、`portfolio_risk`。
 
@@ -353,7 +353,7 @@ cd frontend/console && python -m http.server 8081
 | Sharpe 等 | 回测主表无 Sharpe 列；晋升门暂用 DD/收益/窗/IC |
 | sleeve 回填 | 迁移 `031` 将旧仓写入 `strategy_version=''`；与命名 sleeve 并存时账户合计 NAV 可能偏高（见 [ledger README](./backend/ledger/README.md)） |
 | 开发机数据 | 短窗 / TOP100；覆盖度与实盘研究不可等同 |
-| console | 只读；写操作（晋升审批等）待做 |
+| console | 运维台：Kill / 晋升 / 风控审核经 gateway；跳过质量门须原因 |
 
 ---
 
@@ -361,9 +361,8 @@ cd frontend/console && python -m http.server 8081
 
 （详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. console 写操作（经 `api_gateway`：Kill / 晋升审批等）  
-2. 更长窗 OOS 证据固化（研究侧，非本机 bulk）  
-3. 实盘柜台适配器（更后）
+1. 更长窗 OOS 证据固化（研究侧，非本机 bulk）  
+2. 实盘柜台适配器（更后）
 
 ---
 
@@ -387,8 +386,16 @@ cd frontend/console && python -m http.server 8081
 | 17 | `033` | 未成交残差 pending |
 | 18a | `034` | 行业·ADV 风控；研究证据包（并行） |
 | 18b | `035` | sqrt ADV 冲击成本 |
+| C | （无） | console 写：Kill / 晋升 / review |
 
 ---
+
+### 2026-07-28 · console 写操作
+- **动机**：网关已有 promote / kill / review，运维台仍只读，人工审批只能走 CLI。
+- **迁移**：无（复用 `028` `api_audit_log`）。
+- **模块**：`frontend/console`（表单 + POST）；文档。
+- **行为**：Kill 开/关；策略晋升（默认走质量门，跳过须原因）；单组合或批量 draft 风控审核；结果面板展示成功/失败 detail。
+- **验收**：静态页可写；相关 README / 任务书 / 本 changelog 同步。
 
 ### 2026-07-28 · 阶段 18b：冲击成本（sqrt ADV）
 - **动机**：flat 滑点低估大单冲击；回测与纸面需同一套可版本化冲击假设。
@@ -642,7 +649,8 @@ cd frontend/console && python -m http.server 8081
 | 文档 | 内容 |
 | --- | --- |
 | [ARCHITECTURE_PRINCIPLES.md](./ARCHITECTURE_PRINCIPLES.md) | 强制架构、不变量、合入清单 |
-| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至阶段 18b） |
+| [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) | 分阶段任务书（现至 18b + console 写） |
+
 | [backend/README.md](./backend/README.md) | 后端模块总览与 CLI |
 | [database/README.md](./database/README.md) | 迁移与契约入口 |
 | [database/schema/README.md](./database/schema/README.md) | 表产消登记（权威） |

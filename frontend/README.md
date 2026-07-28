@@ -14,7 +14,7 @@
 
 | 模块/子目录 | 路径 | 主要作用 |
 | --- | --- | --- |
-| console | `console/` | 总控台 / 仪表盘 |
+| console | `console/` | 运维台（查询 + Kill / 晋升 / 风控审核） |
 | research | `research/` | 研究实验可视化 |
 | backtest_view | `backtest_view/` | 回测报告 |
 | portfolio | `portfolio/` | 目标持仓与风控结果 |

@@ -58,7 +58,7 @@
 
 鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。  
 生产建议：`ASHARE_API_REQUIRE_TOKEN=1`（未配置 token 时一律 401）。  
-CORS：本地 console / Vite 源（含 `null` 用于 `file://`）。
+CORS：本地 console / Vite 源（含 `null` 用于 `file://`）。console 可对 promote / kill / review 发 POST（Bearer 与只读相同）。
 
 ## 运行
 
