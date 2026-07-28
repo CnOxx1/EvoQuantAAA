@@ -36,10 +36,12 @@
   - `suite=full`：pandas-ta **全部分类**（candle/cycle/momentum/overlap/performance/statistics/trend/volatility/volume；~150 函数 → ~250+ 序列）；`category` 写入长表
   - 输入复权 OHLCV；不拉外部；缺 bar 跳过；`--category` 可只跑某一类；日更只跑 core，避免全市场×全指标爆库
   - 与 `research_lab` 分工：指标=价量特征落库；研究侧经库消费为 `TECH_RSI_14` / `TECH_MACD_HIST` / `TECH_MA20_BIAS`
+  - UI 经 `api_gateway`：`GET /v1/market/indicators` / `indicators/meta`（见 `backend/api_gateway/README.md`）
 
 ## 边界
 - 做：按区间/标的读 raw（或已 processed 日线），写 processed；幂等可重跑。
 - 不做：拉外部行情；替代 DQ；算研究因子/信号（见 `research_lab`）。
+- 消费者：`research_lab` / `backtest` / **`api_gateway`（市场情报前端）**。
 
 ## 运行
 

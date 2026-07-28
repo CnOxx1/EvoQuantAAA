@@ -12,3 +12,6 @@ _tmp*
 node_modules/
 frontend/.tools/
 frontend/app/dist/
+
+design-refs/
+frontend/app/ui-shot*.png

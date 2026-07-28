@@ -3,9 +3,9 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–21** + **前端 F1 SPA** 已落地（迁移 `001`–`038`）。  
-**下一优先**：前端 F2（Research/Trade/Ledger/Ops）/ 真实券商 SDK / 长窗数据环境跑 OOS。  
-**入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md) · [`frontend/FRONTEND_DESIGN.md`](./frontend/FRONTEND_DESIGN.md)
+**当前进度**：阶段 **1–21** 已落地（迁移 `001`–`038`）。前端按方案 **B（React + Arco Design）** 重建于 `frontend/app`。  
+**下一优先**：真实券商 SDK / 长窗 OOS / K 线与技术指标 API。  
+**入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md) · [`frontend/README.md`](./frontend/README.md)
 
 ---
 
@@ -74,10 +74,13 @@
 | OOS 证据冻结 | walk-forward + `research_evidence_freeze`（迁移 `036`） |
 | 执行适配器 | `paper` / `broker_stub`（迁移 `037`；stub 永不成交） |
 | 实盘闸门 | `live_gated` + `ASHARE_ALLOW_LIVE`（迁移 `038`；武装后仍无 SDK 则拒单） |
-| 前端 F1 | `frontend/app` React SPA（Overview/Strategies/Portfolio/Risk） |
-| E2E + console | `python main.py e2e`；静态 `frontend/console` 并行保留 |
+| 前端（Arco） | `frontend/app`：React 19 + Arco Design + lightweight-charts |
+| 市场情报 UI | 日 K + 全量指标选择器（meta≈279）+ 右下标的上下文 |
+| E2E | `python main.py e2e` |
 
-> **前端 F1（2026-07-28）**：`frontend/app` Vite+React 运维台；晋升/Kill/审核经 gateway；执行 UI 只读。下一优先 F2 只读深化。
+> **市场情报（2026-07-28）**：`/v1/market/bars` + `/v1/market/indicators`（含 meta 分类/主图副图）；前端市场页蜡烛图、指标预设/全量选择器、右下行情·指标末值·异动/龙虎/新闻上下文。默认网关端口 **8088**。
+>
+> **前端（2026-07-28）**：选定方案 B，重建 `frontend/app`（Arco Design）；静态 `frontend/console` 已移除。
 >
 > **阶段 21（2026-07-28）**：实盘环境闸门——`live_gated` + `ASHARE_ALLOW_LIVE`；服务层对 `require_live_env=1` fail-closed；永无真实下单/网络/密钥。下一优先：厂商 SDK（独立仓库开关 + allow_fills）。
 >

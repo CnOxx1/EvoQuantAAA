@@ -10,7 +10,7 @@
 
 | 目录 | 角色 | 职责 |
 | --- | --- | --- |
-| `frontend/` | 交互与展示 | 页面、图表、人工干预、配置 UI；**不直连业务库** |
+| `frontend/` | 交互与展示（**Arco Design SPA**：`frontend/app`） | 页面、图表、人工干预、配置 UI；**不直连业务库** |
 | `backend/` | 业务能力 | 按模块拆分的服务/任务；读写库；对外经 `api_gateway` |
 | `database/` | 数据契约 | 迁移、schema、种子；**唯一事实源定义**（可物理分库） |
 
@@ -157,7 +157,7 @@
 ├── ARCHITECTURE_PRINCIPLES.md
 ├── DEVELOPMENT_PLAN.md
 ├── frontend/
-│   └── console/          # 只读运维台（其余前端目录按需）
+│   └── app/              # React + Arco Design 运维 SPA（唯一前端）
 ├── backend/
 │   ├── shared/ api_gateway/ orchestrator/ security_master/
 │   ├── data_ingest/ data_process/ data_quality/
@@ -165,7 +165,7 @@
 │   ├── portfolio_construct/ risk_engine/ execution/ ledger/
 │   ├── ops_monitor/ e2e/ tests/
 └── database/
-    ├── migrations/       # 001–033
+    ├── migrations/       # 001–038
     ├── schema/           # 产消登记
     └── seeds/
 ```

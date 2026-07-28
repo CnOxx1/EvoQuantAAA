@@ -1,68 +1,64 @@
-# frontend
+# EvoQuantAAA 前端（Arco Design）
 
-## 名称
-前端应用层：只经 `api_gateway` 访问后端；不直连库。
+> 方案 **B**：React 19 + Vite + **Arco Design** + TanStack Query + React Router + `lightweight-charts`  
+> 只经 `api_gateway`；默认 API `http://127.0.0.1:8088`（避免本机 8080 被代理占用）
 
-## 生产数据与落库表
+## 启动
 
-| 生产数据 | 落库表 | 写入时机/说明 |
-| --- | --- | --- |
-| 无 | — | 前端**不直连数据库**；展示与操作经 api_gateway |
-
-
-## 本目录模块一览
-
-| 模块/子目录 | 路径 | 主要作用 |
-| --- | --- | --- |
-| **app（F1 SPA）** | `app/` | React+Vite 运维控制台（主实现） |
-| console | `console/` | F0 静态运维台（并行保留） |
-| design-mocks | `design-mocks/` | UI 效果图 |
-| research | `research/` | 域 README 契约（F2） |
-| backtest_view | `backtest_view/` | 域 README 契约（F2） |
-| portfolio | `portfolio/` | 域 README 契约（实现并入 app） |
-| trade | `trade/` | 域 README 契约（F2） |
-| ops | `ops/` | 域 README 契约（F2） |
-
-## 设计方案
-完整方案见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md)。
-
-## 协作模块索引（供 AI Agent）
-
-| 模块 | README | 主要作用 | 与本模块关系 |
-| --- | --- | --- | --- |
-| api_gateway | `../backend/api_gateway/README.md` | 唯一对外 API | 上游 |
-| backend | `../backend/README.md` | 业务总览 | 间接 |
-| database | `../database/README.md` | 契约 | 不直连 |
-| orchestrator | `../backend/orchestrator/README.md` | 任务 | 经 gateway 触发 |
-| risk_engine | `../backend/risk_engine/README.md` | Kill Switch/放行 | 经 gateway 展示与操作 |
-
-## 边界
-- 做：展示与人工确认/审批类操作（晋升、杀开关、确认目标持仓）。
-- 不做：直连 DB；实现撮合/因子；绕过 gateway 打内部模块；UI 暴露 live 真实下单。
-
-## 输入
-- api_gateway 响应；用户操作
-
-## 输出
-- UI；经 gateway 的命令（只含引用与标量）
-
-## 运行
-
-```bash
-# 终端 1：网关
-cd backend && python main.py gateway --port 8080
-
-# 终端 2：F1 SPA（推荐）
-cd frontend/app && npm install && npm run dev
-# http://127.0.0.1:5173
-
-# 或 F0 静态 console
-cd frontend/console && python -m http.server 8081
+```powershell
+# 可选：仓库内便携 Node
+$env:PATH = "$PWD\.tools\node;$env:PATH"
+cd frontend/app
+npm install
+npm run dev
 ```
 
-- 禁止配置业务库连接串
-- 网关已对本地静态源与 Vite `:5173` 放开 CORS
+浏览器：http://127.0.0.1:5173 · **设置**页填写网关地址（默认 `http://127.0.0.1:8088`）。
+
+配套网关：
+
+```powershell
+cd backend
+python main.py gateway --host 127.0.0.1 --port 8088
+```
+
+## 路由
+
+| 路径 | 页 |
+| --- | --- |
+| `/` | 总览（管道灯带） |
+| `/market` | 市场情报（见下） |
+| `/strategies` | 策略 + 晋升 |
+| `/portfolio` | 组合 + 送审 |
+| `/risk` | Kill + 决策 |
+| `/research` `/trade` `/ledger` `/ops` | 只读列表 |
+| `/settings` | API / token / as_of / 环境 |
+
+## 市场情报（`/market`）
+
+左右分栏工作台：
+
+| 区域 | 内容 |
+| --- | --- |
+| 左表 | 榜单 / 异动 / 新闻 / 龙虎榜（分页）；点击行选中标的 |
+| 右上图 | 前复权日 K（`/v1/market/bars`）；主图叠加 + 副图 |
+| 指标 | 快捷预设 MA/EMA/BOLL/MACD/RSI；`+N` 打开全量选择器（`/v1/market/indicators/meta`，库内约 279 码） |
+| 右下上下文 | 最新行情 OHLC·量额、已选指标末值、异动/龙虎/相关新闻 |
+
+限额：主图最多 8 条叠加、副图最多 6 条；主图/副图由 meta 的 `placement` 自动分流。
+
+相关组件：`ChartPanel` · `IndicatorPicker` · `SymbolContext`；文案集中在 `src/i18n/zh.ts`。
+
+## 脚本
+
+```powershell
+cd frontend/app
+npm run typecheck
+npm run build
+```
 
 ## 不变量
-- 业务真相以 API/库为准，不以前端缓存为准
-- skip 质量门必须填原因；`live` 环境徽章仅提示，不开放真实下单
+
+- 不直连数据库；唯一入口 `api_gateway`
+- live 环境 UI 默认锁定提示
+- 静态 `frontend/console` 已移除；统一使用本 SPA

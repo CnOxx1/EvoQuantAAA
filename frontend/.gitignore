@@ -1,0 +1,4 @@
+﻿frontend/.tools/
+frontend/app/dist/
+frontend/app/node_modules/
+frontend/app/ui-shot*.png

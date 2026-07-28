@@ -1,119 +1,98 @@
 import { useMemo, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getHealth, getKill } from "./api/gateway";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { ConfigProvider } from "@arco-design/web-react";
+import zhCN from "@arco-design/web-react/es/locale/zh-CN";
 import { Shell } from "./components/Shell";
+import { getKill, health, type ClientConfig } from "./api/gateway";
+import { loadSettings, type Settings } from "./state/settings";
 import { OverviewPage } from "./pages/OverviewPage";
+import { MarketPage } from "./pages/MarketPage";
 import { StrategiesPage } from "./pages/StrategiesPage";
-import { RiskPage } from "./pages/RiskPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
-import { SettingsPage } from "./pages/SettingsPage";
+import { RiskPage } from "./pages/RiskPage";
+import { ResearchPage } from "./pages/ResearchPage";
+import { TradePage } from "./pages/TradePage";
 import { LedgerPage } from "./pages/LedgerPage";
 import { OpsPage } from "./pages/OpsPage";
-import { TradePage } from "./pages/TradePage";
-import { ResearchPage } from "./pages/ResearchPage";
-import { MarketPage } from "./pages/MarketPage";
-import { loadSettings, type Settings } from "./state/settings";
+import { SettingsPage } from "./pages/SettingsPage";
 
-export default function App() {
+const qc = new QueryClient({
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+});
+
+function AppInner() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
-  const qc = useQueryClient();
-  const cfg = useMemo(
-    () => ({ apiBase: settings.apiBase, apiToken: settings.apiToken }),
-    [settings.apiBase, settings.apiToken],
+  const cfg: ClientConfig = useMemo(
+    () => ({ apiBase: settings.apiBase, token: settings.token }),
+    [settings.apiBase, settings.token],
   );
 
   const healthQ = useQuery({
-    queryKey: ["health", cfg.apiBase, cfg.apiToken],
-    queryFn: () => getHealth(cfg),
-    retry: 1,
-    refetchInterval: 30_000,
-  });
-  const killQ = useQuery({
-    queryKey: ["kill", cfg.apiBase],
-    queryFn: () => getKill(cfg),
-    enabled: Boolean(healthQ.data?.ok),
+    queryKey: ["health", cfg.apiBase],
+    queryFn: () => health(cfg),
     refetchInterval: 15_000,
   });
+  const killQ = useQuery({
+    queryKey: ["kill", cfg.apiBase, cfg.token],
+    queryFn: () => getKill(cfg),
+    enabled: healthQ.isSuccess,
+    refetchInterval: 10_000,
+  });
 
-  const connected = Boolean(healthQ.data?.ok);
+  const connected = healthQ.isSuccess;
+  const refresh = () => {
+    void qc.invalidateQueries();
+  };
+
+  const pageProps = { cfg, settings, connected };
 
   return (
-    <Routes>
-      <Route
-        element={
-          <Shell
-            settings={settings}
-            kill={killQ.data}
-            connected={connected}
-            onRefresh={() => {
-              void qc.invalidateQueries();
-            }}
+    <BrowserRouter>
+      <Routes>
+        <Route
+          element={
+            <Shell
+              settings={settings}
+              kill={killQ.data}
+              connected={connected}
+              onRefresh={refresh}
+            />
+          }
+        >
+          <Route path="/" element={<OverviewPage {...pageProps} />} />
+          <Route path="/market" element={<MarketPage {...pageProps} />} />
+          <Route path="/strategies" element={<StrategiesPage {...pageProps} />} />
+          <Route path="/portfolio" element={<PortfolioPage {...pageProps} />} />
+          <Route path="/risk" element={<RiskPage {...pageProps} />} />
+          <Route path="/research" element={<ResearchPage {...pageProps} />} />
+          <Route path="/trade" element={<TradePage {...pageProps} />} />
+          <Route path="/ledger" element={<LedgerPage {...pageProps} />} />
+          <Route path="/ops" element={<OpsPage {...pageProps} />} />
+          <Route
+            path="/settings"
+            element={
+              <SettingsPage
+                settings={settings}
+                onSave={(s) => {
+                  setSettings(s);
+                }}
+              />
+            }
           />
-        }
-      >
-        <Route
-          index
-          element={
-            <OverviewPage
-              cfg={cfg}
-              settings={settings}
-              connected={connected}
-            />
-          }
-        />
-        <Route
-          path="strategies"
-          element={<StrategiesPage cfg={cfg} connected={connected} />}
-        />
-        <Route
-          path="portfolio"
-          element={
-            <PortfolioPage
-              cfg={cfg}
-              settings={settings}
-              connected={connected}
-            />
-          }
-        />
-        <Route
-          path="risk"
-          element={<RiskPage cfg={cfg} connected={connected} />}
-        />
-        <Route
-          path="research"
-          element={<ResearchPage cfg={cfg} connected={connected} />}
-        />
-        <Route
-          path="market"
-          element={
-            <MarketPage cfg={cfg} settings={settings} connected={connected} />
-          }
-        />
-        <Route
-          path="trade"
-          element={
-            <TradePage cfg={cfg} settings={settings} connected={connected} />
-          }
-        />
-        <Route
-          path="ledger"
-          element={
-            <LedgerPage cfg={cfg} settings={settings} connected={connected} />
-          }
-        />
-        <Route
-          path="ops"
-          element={<OpsPage cfg={cfg} connected={connected} />}
-        />
-        <Route
-          path="settings"
-          element={
-            <SettingsPage settings={settings} onChange={setSettings} />
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={qc}>
+      <ConfigProvider locale={zhCN}>
+        <AppInner />
+      </ConfigProvider>
+    </QueryClientProvider>
   );
 }

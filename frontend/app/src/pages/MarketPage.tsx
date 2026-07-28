@@ -1,34 +1,74 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Input,
+  Message,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+} from "@arco-design/web-react";
+import {
+  getMarketIndicatorsMeta,
   getMarketRankMeta,
   listAbnormalMoves,
   listDragonTiger,
+  listMarketBars,
+  listMarketIndicators,
   listMarketRanks,
   listNews,
   type ClientConfig,
+  type JsonMap,
 } from "../api/gateway";
-import { DataTable } from "../components/DataTable";
-import { StatusPill } from "../components/StatusPill";
-import { n, s } from "../lib/format";
+import {
+  ChartPanel,
+  type CandlePoint,
+  type ChartPoint,
+  type LinePoint,
+  type OverlayLine,
+  type SubPane,
+} from "../components/ChartPanel";
+import { IndicatorPicker } from "../components/IndicatorPicker";
+import { SymbolContext } from "../components/SymbolContext";
+import {
+  DEFAULT_ACTIVE,
+  PRESETS,
+  colorFor,
+  placementOf,
+  presetActive,
+  styleOf,
+  togglePreset,
+  type IndicatorMetaItem,
+} from "../lib/indicatorCatalog";
+import { zh } from "../i18n/zh";
+import { fmtAmt, fmtPct, s } from "../lib/format";
 import type { Settings } from "../state/settings";
-import styles from "./pages.module.css";
+import styles from "./MarketPage.module.css";
 
-type Tab = "ranks" | "abnormal" | "news" | "lhb";
+type TabKey = "ranks" | "abnormal" | "news" | "lhb";
+
+const TABLE_PAGE = {
+  pageSize: 20,
+  size: "mini" as const,
+  showTotal: true,
+  showJumper: true,
+};
 
 const RANK_ZH: Record<string, string> = {
-  PCT_CHG_UP: "涨幅榜",
-  PCT_CHG_DOWN: "跌幅榜",
-  VOLUME: "成交量榜",
-  AMOUNT: "成交额榜",
-  TURNOVER: "换手榜",
+  PCT_CHG_UP: zh.pctUp,
+  PCT_CHG_DOWN: zh.pctDown,
+  VOLUME: zh.volRank,
+  AMOUNT: zh.amtRank,
+  TURNOVER: zh.turnRank,
 };
 
 const CHANNEL_ZH: Record<string, string> = {
-  official: "官方快讯",
-  eastmoney: "东财",
-  policy: "政策",
-  forum: "论坛情绪",
+  official: zh.chOfficial,
+  eastmoney: zh.chEm,
+  policy: zh.chPolicy,
+  forum: zh.chForum,
   mock: "mock",
 };
 
@@ -41,318 +81,666 @@ export function MarketPage({
   settings: Settings;
   connected: boolean;
 }) {
-  const [tab, setTab] = useState<Tab>("ranks");
-  const [tradeDate, setTradeDate] = useState(settings.asOf);
+  const [tab, setTab] = useState<TabKey>("ranks");
+  const [tradeDate, setTradeDate] = useState("");
   const [rankType, setRankType] = useState("PCT_CHG_UP");
   const [newsChannel, setNewsChannel] = useState("");
-  const [newsSymbol, setNewsSymbol] = useState("");
+  const [symbolQ, setSymbolQ] = useState("");
+  const [abnFilter, setAbnFilter] = useState("");
+  const [selected, setSelected] = useState("");
+  const [activeInd, setActiveInd] = useState<string[]>(DEFAULT_ACTIVE);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const indMetaQ = useQuery({
+    queryKey: ["ind-meta", cfg.apiBase],
+    queryFn: () => getMarketIndicatorsMeta(cfg),
+    enabled: connected,
+    staleTime: 60_000,
+  });
+  const indSymMetaQ = useQuery({
+    queryKey: ["ind-meta-sym", cfg.apiBase, selected],
+    queryFn: () => getMarketIndicatorsMeta(cfg, { symbol: selected }),
+    enabled: connected && Boolean(selected),
+    staleTime: 30_000,
+  });
+
+  const catalog: IndicatorMetaItem[] = indMetaQ.data?.codes ?? [];
+  const metaByCode = useMemo(() => {
+    const m = new Map<string, IndicatorMetaItem>();
+    for (const c of catalog) m.set(c.code, c);
+    return m;
+  }, [catalog]);
+  const availableCodes = useMemo(
+    () => new Set((indSymMetaQ.data?.codes ?? []).map((c) => c.code)),
+    [indSymMetaQ.data],
+  );
 
   const metaQ = useQuery({
-    queryKey: ["market-rank-meta", cfg.apiBase],
+    queryKey: ["market-meta", cfg.apiBase],
     queryFn: () => getMarketRankMeta(cfg),
     enabled: connected,
   });
-
   const dates = metaQ.data?.trade_dates ?? [];
   const types = metaQ.data?.rank_types ?? [];
+  const effectiveDate = tradeDate || dates[0] || settings.asOf;
+  const sym = symbolQ.trim();
 
   useEffect(() => {
-    if (!dates.length) return;
-    if (!tradeDate || !dates.includes(tradeDate)) {
+    if (dates.length && (!tradeDate || !dates.includes(tradeDate))) {
       setTradeDate(dates[0]);
     }
   }, [dates, tradeDate]);
 
-  const effectiveDate = tradeDate || dates[0] || settings.asOf;
+  useEffect(() => {
+    if (types.length && !types.includes(rankType)) setRankType(types[0]);
+  }, [types, rankType]);
 
   const ranksQ = useQuery({
-    queryKey: ["market-ranks", cfg.apiBase, effectiveDate, rankType],
+    queryKey: ["ranks", cfg.apiBase, effectiveDate, rankType],
     queryFn: () =>
       listMarketRanks(cfg, {
         tradeDate: effectiveDate,
-        rankType: rankType || undefined,
+        rankType,
         limit: 100,
       }),
-    enabled: connected && tab === "ranks",
+    enabled: connected && tab === "ranks" && Boolean(effectiveDate),
   });
-
   const abnQ = useQuery({
-    queryKey: ["market-abnormal", cfg.apiBase, effectiveDate],
+    queryKey: ["abn", cfg.apiBase, effectiveDate],
     queryFn: () =>
-      listAbnormalMoves(cfg, { tradeDate: effectiveDate, limit: 150 }),
-    enabled: connected && tab === "abnormal",
+      listAbnormalMoves(cfg, { tradeDate: effectiveDate, limit: 200 }),
+    enabled: connected && tab === "abnormal" && Boolean(effectiveDate),
   });
-
   const newsQ = useQuery({
-    queryKey: ["market-news", cfg.apiBase, newsChannel, newsSymbol],
+    queryKey: ["news", cfg.apiBase, newsChannel, sym],
     queryFn: () =>
       listNews(cfg, {
         channel: newsChannel || undefined,
-        symbol: newsSymbol.trim() || undefined,
+        symbol: sym || undefined,
         limit: 80,
       }),
     enabled: connected && tab === "news",
   });
-
   const lhbQ = useQuery({
-    queryKey: ["market-lhb", cfg.apiBase, effectiveDate],
+    queryKey: ["lhb", cfg.apiBase, effectiveDate],
     queryFn: () =>
       listDragonTiger(cfg, { tradeDate: effectiveDate, limit: 100 }),
-    enabled: connected && tab === "lhb",
+    enabled: connected && tab === "lhb" && Boolean(effectiveDate),
   });
 
-  const abnTypes = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of abnQ.data ?? []) {
-      if (r.change_type) set.add(String(r.change_type));
+  const ranks = useMemo(() => {
+    let rows = ranksQ.data ?? [];
+    if (sym) {
+      rows = rows.filter(
+        (r) =>
+          String(r.symbol || "").includes(sym) ||
+          String(r.name || "").includes(sym),
+      );
     }
-    return [...set];
+    return rows;
+  }, [ranksQ.data, sym]);
+
+  const abnTypeCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of abnQ.data ?? []) {
+      const k = String(r.change_type || zh.other);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [abnQ.data]);
 
-  const [abnFilter, setAbnFilter] = useState("");
-  const abnRows = (abnQ.data ?? []).filter(
-    (r) => !abnFilter || String(r.change_type) === abnFilter,
-  );
+  const abnRows = useMemo(() => {
+    let rows = abnQ.data ?? [];
+    if (abnFilter) {
+      rows = rows.filter((r) => String(r.change_type) === abnFilter);
+    }
+    if (sym) {
+      rows = rows.filter(
+        (r) =>
+          String(r.symbol || "").includes(sym) ||
+          String(r.name || "").includes(sym),
+      );
+    }
+    return rows;
+  }, [abnQ.data, abnFilter, sym]);
+
+  const lhbRows = useMemo(() => {
+    let rows = lhbQ.data ?? [];
+    if (sym) rows = rows.filter((r) => String(r.symbol || "").includes(sym));
+    return rows;
+  }, [lhbQ.data, sym]);
+
+  useEffect(() => {
+    setSelected("");
+  }, [tab, effectiveDate, rankType]);
+
+  const barsQ = useQuery({
+    queryKey: ["bars", cfg.apiBase, selected, effectiveDate],
+    queryFn: () =>
+      listMarketBars(cfg, {
+        symbol: selected,
+        end: effectiveDate || undefined,
+        factorType: "qfq",
+        limit: 180,
+      }),
+    enabled: connected && Boolean(selected),
+  });
+
+  const indQ = useQuery({
+    queryKey: [
+      "indicators",
+      cfg.apiBase,
+      selected,
+      effectiveDate,
+      activeInd.join(","),
+    ],
+    queryFn: () =>
+      listMarketIndicators(cfg, {
+        symbol: selected,
+        codes: activeInd,
+        end: effectiveDate || undefined,
+        factorType: "qfq",
+        limit: 180,
+      }),
+    enabled: connected && Boolean(selected) && activeInd.length > 0,
+  });
+
+  const candles: CandlePoint[] = useMemo(() => {
+    const bars = barsQ.data?.bars ?? [];
+    return bars
+      .map((b) => ({
+        time: String(b.trade_date || "").slice(0, 10),
+        open: Number(b.open),
+        high: Number(b.high),
+        low: Number(b.low),
+        close: Number(b.close),
+      }))
+      .filter(
+        (c) =>
+          /^\d{4}-\d{2}-\d{2}$/.test(c.time) &&
+          Number.isFinite(c.open) &&
+          Number.isFinite(c.high) &&
+          Number.isFinite(c.low) &&
+          Number.isFinite(c.close),
+      );
+  }, [barsQ.data]);
+
+  const toLine = (code: string): LinePoint[] =>
+    (indQ.data?.series?.[code] ?? [])
+      .map((p) => ({
+        time: String(p.trade_date || "").slice(0, 10),
+        value: Number(p.value),
+      }))
+      .filter((p) => /^\d{4}-\d{2}-\d{2}$/.test(p.time) && Number.isFinite(p.value));
+
+  const overlays: OverlayLine[] = useMemo(() => {
+    if (!selected) return [];
+    return activeInd
+      .filter((c) => placementOf(c, metaByCode) === "overlay")
+      .map((code, i) => ({
+        id: code,
+        color: colorFor(i),
+        data: toLine(code),
+        lineWidth: code === "MA_20" || code === "BOLL_MID" ? 2 : 1,
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, activeInd, indQ.data, metaByCode]);
+
+  const subPane: SubPane = useMemo(() => {
+    if (!selected) return { kind: "none" };
+    const series = activeInd
+      .filter((c) => placementOf(c, metaByCode) === "sub")
+      .map((code, i) => ({
+        id: code,
+        color: colorFor(i + 4),
+        data: toLine(code),
+        style: styleOf(code, metaByCode),
+      }));
+    if (!series.length) return { kind: "none" };
+    return { kind: "multi", series };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, activeInd, indQ.data, metaByCode]);
+
+  const lastBar = useMemo(() => {
+    const bars = barsQ.data?.bars ?? [];
+    if (!bars.length) return null;
+    return bars[bars.length - 1] as JsonMap;
+  }, [barsQ.data]);
+
+  const selectedName = useMemo(() => {
+    if (!selected) return "";
+    const pools: JsonMap[] = [
+      ...(ranksQ.data ?? []),
+      ...(abnQ.data ?? []),
+      ...(lhbQ.data ?? []),
+    ];
+    const hit = pools.find((r) => String(r.symbol || "") === selected);
+    return hit ? s(hit.name, "") : "";
+  }, [selected, ranksQ.data, abnQ.data, lhbQ.data]);
+
+  const chartSeries: ChartPoint[] = useMemo(() => {
+    if (tab === "ranks") {
+      return ranks.slice(0, 40).map((r, i) => {
+        const v = Number(r.pct_chg);
+        return {
+          time: (i + 1) * 86400,
+          value: Number.isFinite(v) ? v : 0,
+          color: v >= 0 ? "#f53f3f" : "#00b42a",
+        };
+      });
+    }
+    if (tab === "lhb") {
+      return lhbRows.slice(0, 40).map((r, i) => {
+        const v = Number(r.net_amount);
+        const scaled = Number.isFinite(v) ? v / 1e8 : 0;
+        return {
+          time: (i + 1) * 86400,
+          value: scaled,
+          color: scaled >= 0 ? "#f53f3f" : "#00b42a",
+        };
+      });
+    }
+    if (tab === "abnormal") {
+      return abnTypeCounts.map(([, c], i) => ({
+        time: (i + 1) * 86400,
+        value: c,
+        color: "#165dff",
+      }));
+    }
+    return [];
+  }, [tab, ranks, lhbRows, abnTypeCounts]);
+
+  if (!connected) {
+    return (
+      <div className="page">
+        <Typography.Text type="secondary">{zh.notConnected}</Typography.Text>
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <h1>市场情报</h1>
-      <p className="lede">
-        展示后端已落库的榜单 / 异动 / 新闻 / 龙虎榜，便于盘面分析。数据只读，不触发取数。
-      </p>
+    <div className={`pageBleed ${styles.workbench}`}>
+      <div className={styles.bar}>
+        <Space size={8}>
+          <Typography.Text className={styles.title}>{zh.marketIntel}</Typography.Text>
+          <Tabs
+            type="rounded"
+            size="small"
+            activeTab={tab}
+            onChange={(k) => setTab(k as TabKey)}
+            style={{ marginBottom: 0 }}
+          >
+            <Tabs.TabPane key="ranks" title={zh.ranks} />
+            <Tabs.TabPane key="abnormal" title={zh.abnormal} />
+            <Tabs.TabPane key="news" title={zh.news} />
+            <Tabs.TabPane key="lhb" title={zh.lhb} />
+          </Tabs>
+        </Space>
+        <Space size={8}>
+          {tab !== "news" ? (
+            <Select
+              size="mini"
+              style={{ width: 120 }}
+              value={effectiveDate}
+              onChange={setTradeDate}
+              options={(dates.length ? dates : [effectiveDate]).map((d) => ({
+                label: d,
+                value: d,
+              }))}
+            />
+          ) : (
+            <Select
+              size="mini"
+              allowClear
+              placeholder={zh.channel}
+              style={{ width: 120 }}
+              value={newsChannel || undefined}
+              onChange={(v) => setNewsChannel(v || "")}
+              options={Object.entries(CHANNEL_ZH).map(([k, v]) => ({
+                label: v,
+                value: k,
+              }))}
+            />
+          )}
+          <Input
+            size="mini"
+            style={{ width: 140 }}
+            value={symbolQ}
+            onChange={setSymbolQ}
+            placeholder={zh.filter}
+            allowClear
+          />
+        </Space>
+      </div>
 
-      {!connected ? (
-        <p className={styles.muted}>未连接网关，请先到「设置」填写 API 地址。</p>
-      ) : (
-        <>
-          <div className={styles.toolbar}>
-            {(tab === "ranks" || tab === "abnormal" || tab === "lhb") && (
-              <label>
-                交易日
-                <select
-                  value={effectiveDate}
-                  onChange={(e) => setTradeDate(e.target.value)}
-                >
-                  {(dates.length ? dates : [effectiveDate]).map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {tab === "ranks" ? (
-              <label>
-                榜单类型
-                <select
-                  value={rankType}
-                  onChange={(e) => setRankType(e.target.value)}
-                >
-                  {(types.length
-                    ? types
-                    : Object.keys(RANK_ZH)
-                  ).map((t) => (
-                    <option key={t} value={t}>
-                      {RANK_ZH[t] || t}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {tab === "abnormal" ? (
-              <label>
-                异动类型
-                <select
-                  value={abnFilter}
-                  onChange={(e) => setAbnFilter(e.target.value)}
-                >
-                  <option value="">全部</option>
-                  {abnTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {tab === "news" ? (
-              <>
-                <label>
-                  频道
-                  <select
-                    value={newsChannel}
-                    onChange={(e) => setNewsChannel(e.target.value)}
-                  >
-                    <option value="">全部</option>
-                    {Object.entries(CHANNEL_ZH).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  代码（可选）
-                  <input
-                    className="mono"
-                    value={newsSymbol}
-                    onChange={(e) => setNewsSymbol(e.target.value)}
-                    placeholder="如 600000"
-                  />
-                </label>
-              </>
-            ) : null}
-          </div>
+      {tab === "ranks" ? (
+        <div className={styles.chips}>
+          {(types.length ? types : Object.keys(RANK_ZH)).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`${styles.chip} ${rankType === t ? styles.chipOn : ""}`}
+              onClick={() => setRankType(t)}
+            >
+              {RANK_ZH[t] || t}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-          <div className={styles.btnRow} style={{ marginBottom: "0.85rem" }}>
-            {(
-              [
-                ["ranks", "榜单"],
-                ["abnormal", "异动"],
-                ["news", "新闻"],
-                ["lhb", "龙虎榜"],
-              ] as const
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                className={tab === k ? styles.primary : styles.secondary}
-                onClick={() => setTab(k)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+      {tab === "abnormal" ? (
+        <div className={styles.chips}>
+          <button
+            type="button"
+            className={`${styles.chip} ${!abnFilter ? styles.chipOn : ""}`}
+            onClick={() => setAbnFilter("")}
+          >
+            {zh.all} {abnQ.data?.length ?? 0}
+          </button>
+          {abnTypeCounts.map(([t, c]) => (
+            <button
+              key={t}
+              type="button"
+              className={`${styles.chip} ${abnFilter === t ? styles.chipOn : ""}`}
+              onClick={() => setAbnFilter(t)}
+            >
+              {t} {c}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
+      <div className={styles.split}>
+        <div className={styles.list}>
           {tab === "ranks" ? (
-            <section className={styles.panel}>
-              <h2>
-                {RANK_ZH[rankType] || rankType} · {effectiveDate}（
-                {ranksQ.data?.length ?? 0}）
-              </h2>
-              <DataTable
-                headers={[
-                  "名次",
-                  "代码",
-                  "名称",
-                  "涨跌幅%",
-                  "收盘",
-                  "成交量",
-                  "成交额",
-                  "换手",
-                ]}
-                empty="该日无榜单数据"
-                isEmpty={(ranksQ.data ?? []).length === 0}
-              >
-                {(ranksQ.data ?? []).map((r) => (
-                  <tr key={`${s(r.rank_type)}-${s(r.symbol)}-${s(r.rank_no)}`}>
-                    <td>{n(r.rank_no, 0)}</td>
-                    <td className="mono">{s(r.symbol)}</td>
-                    <td>{s(r.name)}</td>
-                    <td>{n(r.pct_chg, 2)}</td>
-                    <td>{n(r.close)}</td>
-                    <td>{n(r.volume, 0)}</td>
-                    <td>{n(r.amount, 0)}</td>
-                    <td>{n(r.turnover, 4)}</td>
-                  </tr>
-                ))}
-              </DataTable>
-            </section>
+            <Table
+              rowKey={(r: JsonMap) => `${s(r.symbol)}-${s(r.rank_no)}`}
+              size="small"
+              pagination={TABLE_PAGE}
+              loading={ranksQ.isLoading}
+              data={ranks}
+              scroll={{ x: 560 }}
+              rowClassName={(r) =>
+                s(r.symbol) === selected ? styles.rowOn : ""
+              }
+              onRow={(r) => ({
+                onClick: () => setSelected(s(r.symbol, "")),
+              })}
+              columns={[
+                {
+                  title: "#",
+                  dataIndex: "rank_no",
+                  width: 56,
+                  render: (v) => <span className="mono">{s(v)}</span>,
+                },
+                {
+                  title: zh.symbol,
+                  width: 120,
+                  render: (_, r) => {
+                    const name = s(r.name, "");
+                    const showName = Boolean(name) && name !== "-" && name !== "\u2014";
+                    return (
+                      <div>
+                        <div className="mono">{s(r.symbol)}</div>
+                        {showName ? (
+                          <div className={styles.sub}>{name}</div>
+                        ) : null}
+                      </div>
+                    );
+                  },
+                },
+                {
+                  title: zh.chg,
+                  width: 88,
+                  render: (_, r) => {
+                    const p = fmtPct(r.pct_chg);
+                    return (
+                      <span className={p.up ? "up" : p.down ? "down" : ""}>
+                        {p.text}
+                      </span>
+                    );
+                  },
+                },
+                {
+                  title: zh.close,
+                  width: 72,
+                  render: (_, r) => (
+                    <span className="mono">{Number(r.close).toFixed(2)}</span>
+                  ),
+                },
+                {
+                  title: zh.amount,
+                  width: 96,
+                  render: (_, r) => (
+                    <span className="mono">{fmtAmt(r.amount)}</span>
+                  ),
+                },
+              ]}
+            />
           ) : null}
 
           {tab === "abnormal" ? (
-            <section className={styles.panel}>
-              <h2>
-                盘口异动 · {effectiveDate}（{abnRows.length}）
-              </h2>
-              <DataTable
-                headers={["时间", "代码", "名称", "类型", "相关信息"]}
-                empty="该日无异动"
-                isEmpty={abnRows.length === 0}
-              >
-                {abnRows.map((r, i) => (
-                  <tr key={`${s(r.source_event_id)}-${i}`}>
-                    <td className="mono">{s(r.event_time)}</td>
-                    <td className="mono">{s(r.symbol)}</td>
-                    <td>{s(r.name)}</td>
-                    <td>
-                      <StatusPill tone="info">{s(r.change_type)}</StatusPill>
-                    </td>
-                    <td className={styles.muted}>{s(r.related_info)}</td>
-                  </tr>
-                ))}
-              </DataTable>
-            </section>
+            <Table
+              rowKey={(r: JsonMap) =>
+                `${s(r.source_event_id)}-${s(r.symbol)}-${s(r.event_time)}`
+              }
+              size="small"
+              pagination={TABLE_PAGE}
+              loading={abnQ.isLoading}
+              data={abnRows}
+              onRow={(r) => ({
+                onClick: () => setSelected(s(r.symbol, "")),
+              })}
+              columns={[
+                {
+                  title: zh.time,
+                  width: 150,
+                  render: (_, r) => (
+                    <span className="mono">{s(r.event_time)}</span>
+                  ),
+                },
+                {
+                  title: zh.symbol,
+                  render: (_, r) => (
+                    <div>
+                      <div className="mono">{s(r.symbol)}</div>
+                      <div className={styles.sub}>{s(r.name)}</div>
+                    </div>
+                  ),
+                },
+                {
+                  title: zh.type,
+                  width: 120,
+                  render: (_, r) => (
+                    <Tag size="small">{s(r.change_type)}</Tag>
+                  ),
+                },
+                {
+                  title: zh.info,
+                  render: (_, r) => (
+                    <span className={styles.clip}>{s(r.related_info)}</span>
+                  ),
+                },
+              ]}
+            />
           ) : null}
 
           {tab === "news" ? (
-            <section className={styles.panel}>
-              <h2>新闻 / 舆情（{newsQ.data?.length ?? 0}）</h2>
-              <DataTable
-                headers={["时间", "频道", "代码", "标题", "来源"]}
-                empty="暂无新闻"
-                isEmpty={(newsQ.data ?? []).length === 0}
-              >
-                {(newsQ.data ?? []).map((r) => (
-                  <tr key={s(r.source_news_id ?? r.title)}>
-                    <td className="mono">{s(r.publish_time)}</td>
-                    <td>
-                      {CHANNEL_ZH[String(r.channel)] || s(r.channel)}
-                    </td>
-                    <td className="mono">{s(r.symbol)}</td>
-                    <td>
-                      {r.url ? (
-                        <a href={String(r.url)} target="_blank" rel="noreferrer">
-                          {s(r.title)}
-                        </a>
-                      ) : (
-                        s(r.title)
-                      )}
-                      {r.summary ? (
-                        <div className={styles.muted}>{s(r.summary)}</div>
-                      ) : null}
-                    </td>
-                    <td>{s(r.media_source ?? r.source)}</td>
-                  </tr>
-                ))}
-              </DataTable>
-            </section>
+            <Table
+              rowKey={(r: JsonMap) => s(r.source_news_id ?? r.title)}
+              size="small"
+              pagination={TABLE_PAGE}
+              loading={newsQ.isLoading}
+              data={newsQ.data ?? []}
+              columns={[
+                {
+                  title: zh.time,
+                  width: 150,
+                  render: (_, r) => (
+                    <span className="mono">{s(r.publish_time)}</span>
+                  ),
+                },
+                {
+                  title: zh.channel,
+                  width: 90,
+                  render: (_, r) =>
+                    CHANNEL_ZH[String(r.channel)] || s(r.channel),
+                },
+                {
+                  title: zh.title,
+                  render: (_, r) =>
+                    r.url ? (
+                      <a href={String(r.url)} target="_blank" rel="noreferrer">
+                        {s(r.title)}
+                      </a>
+                    ) : (
+                      s(r.title)
+                    ),
+                },
+              ]}
+            />
           ) : null}
 
           {tab === "lhb" ? (
-            <section className={styles.panel}>
-              <h2>
-                龙虎榜 · {effectiveDate}（{lhbQ.data?.length ?? 0}）
-              </h2>
-              <DataTable
-                headers={[
-                  "代码",
-                  "涨跌幅%",
-                  "收盘",
-                  "净额",
-                  "买入",
-                  "卖出",
-                  "上榜原因",
-                ]}
-                empty="该日无龙虎榜"
-                isEmpty={(lhbQ.data ?? []).length === 0}
-              >
-                {(lhbQ.data ?? []).map((r) => (
-                  <tr key={`${s(r.symbol)}-${s(r.source_event_id)}`}>
-                    <td className="mono">{s(r.symbol)}</td>
-                    <td>{n(r.pct_chg, 2)}</td>
-                    <td>{n(r.close)}</td>
-                    <td>{n(r.net_amount, 0)}</td>
-                    <td>{n(r.buy_amount, 0)}</td>
-                    <td>{n(r.sell_amount, 0)}</td>
-                    <td>{s(r.reason)}</td>
-                  </tr>
-                ))}
-              </DataTable>
-            </section>
+            <Table
+              rowKey={(r: JsonMap) => `${s(r.symbol)}-${s(r.source_event_id)}`}
+              size="small"
+              pagination={TABLE_PAGE}
+              loading={lhbQ.isLoading}
+              data={lhbRows}
+              onRow={(r) => ({
+                onClick: () => setSelected(s(r.symbol, "")),
+              })}
+              columns={[
+                {
+                  title: zh.code,
+                  width: 80,
+                  render: (_, r) => (
+                    <span className="mono">{s(r.symbol)}</span>
+                  ),
+                },
+                {
+                  title: zh.chg,
+                  width: 88,
+                  render: (_, r) => {
+                    const p = fmtPct(r.pct_chg);
+                    return (
+                      <span className={p.up ? "up" : p.down ? "down" : ""}>
+                        {p.text}
+                      </span>
+                    );
+                  },
+                },
+                {
+                  title: zh.net,
+                  width: 88,
+                  render: (_, r) => {
+                    const x = Number(r.net_amount);
+                    const cls = x > 0 ? "up" : x < 0 ? "down" : "";
+                    return (
+                      <span className={cls}>{fmtAmt(r.net_amount)}</span>
+                    );
+                  },
+                },
+                { title: zh.reason, render: (_, r) => s(r.reason) },
+              ]}
+            />
           ) : null}
-        </>
-      )}
+        </div>
+
+        <div className={styles.side}>
+          <ChartPanel
+            title={
+              selected
+                ? `${zh.klineQfq} ${selected}`
+                : tab === "ranks"
+                  ? zh.crossSection
+                  : tab === "lhb"
+                    ? zh.lhbNetYi
+                    : tab === "abnormal"
+                      ? zh.abnDist
+                      : zh.newsPlaceholder
+            }
+            subtitle={
+              selected
+                ? barsQ.isLoading
+                  ? zh.barsLoading
+                  : indQ.isLoading
+                    ? zh.indLoading
+                    : `${zh.klineQfq} / n=${candles.length}${
+                        activeInd.length
+                          ? ` / ind=${activeInd.length}`
+                          : ""
+                      }`
+                : tab === "ranks"
+                  ? `${RANK_ZH[rankType] || rankType} / Top40`
+                  : effectiveDate
+            }
+            mode={selected ? "candle" : "histogram"}
+            candles={selected ? candles : []}
+            overlays={selected ? overlays : []}
+            subPane={selected ? subPane : { kind: "none" }}
+            data={selected || tab === "news" ? [] : chartSeries}
+            height={selected ? 420 : 280}
+            emptyHint={
+              selected
+                ? barsQ.isLoading
+                  ? zh.barsLoading
+                  : zh.noBars
+                : zh.hintClick
+            }
+            indicators={
+              selected
+                ? [
+                    ...PRESETS.map((p) => ({
+                      id: p.id,
+                      label: p.label,
+                      active: presetActive(activeInd, p),
+                    })),
+                    {
+                      id: "all",
+                      label: `+${catalog.length || ""}`,
+                      active: pickerOpen,
+                    },
+                  ]
+                : undefined
+            }
+            onToggleIndicator={(id) => {
+              if (id === "all") {
+                setPickerOpen(true);
+                return;
+              }
+              const preset = PRESETS.find((p) => p.id === id);
+              if (!preset) return;
+              const { next, msg } = togglePreset(
+                activeInd,
+                preset,
+                metaByCode,
+              );
+              if (msg) Message.warning(msg);
+              setActiveInd(next);
+            }}
+          />
+          <IndicatorPicker
+            visible={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            catalog={catalog}
+            available={availableCodes}
+            active={activeInd}
+            onChange={setActiveInd}
+          />
+          <SymbolContext
+            cfg={cfg}
+            connected={connected}
+            selected={selected}
+            tradeDate={effectiveDate}
+            lastBar={lastBar}
+            name={selectedName}
+            indSeries={indQ.data?.series ?? {}}
+            activeCodes={activeInd}
+          />
+        </div>
+      </div>
     </div>
   );
 }

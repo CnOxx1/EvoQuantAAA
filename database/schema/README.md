@@ -79,10 +79,10 @@
 | raw_stock_relation | market_data | data_ingest/alpha_relation | research_lab, api_gateway/frontend | (src, dst, relation_type, as_of_date, source_event_id, source) | ALPHA；个股关系边；`HOT_RELATE`/`HOLDER_TEAM`/`CONCEPT_CO`/`INDUSTRY_CO` |
 | raw_*（统称） | market_data | data_ingest | data_process | batch_id | 提交后可见 |
 | process_batch | oltp | data_process | data_quality, ops_monitor | process_batch_id | created→committed/failed |
-| processed_equity_bar_1d | market_data | data_process (equity_1d) | data_quality, research_lab, backtest | (symbol, trade_date, factor_type) | 复权价/ret_1d/can_buy|sell；缺板时 limit_derived |
+| processed_equity_bar_1d | market_data | data_process (equity_1d) | data_quality, research_lab, backtest, api_gateway/frontend | (symbol, trade_date, factor_type) | 复权价/ret_1d/can_buy|sell；缺板时 limit_derived |
 | processed_index_bar_1d | market_data | data_process (index_1d) | data_quality, research_lab, backtest | (index_symbol, trade_date) | 指数收益 |
 | processed_fund_snapshot | market_data | data_process (fundamental_pit) | research_lab | (symbol, valid_from) | 基本面 PIT 区间；`publish_date`=`announce_date`；`valid_to` 可空 |
-| processed_tech_indicator_1d | market_data | data_process (tech_indicator) | research_lab, backtest | (symbol, trade_date, factor_type, indicator_code) | 日线技术指标；`category`=core\|momentum\|…；suite=core/full；有 bar 才算 |
+| processed_tech_indicator_1d | market_data | data_process (tech_indicator) | research_lab, backtest, api_gateway/frontend | (symbol, trade_date, factor_type, indicator_code) | 日线技术指标；`category`=core\|momentum\|…；suite=core/full；有 bar 才算 |
 | processed_equity_bar_min | market_data | data_process (equity_15m/60m) | data_process tech_indicator | (symbol, bar_time, freq, factor_type) | 分钟复权 OHLCV；因子取当日 adj_factor |
 | processed_tech_indicator_min | market_data | data_process (tech_indicator --freq) | research_lab | (symbol, bar_time, freq, factor_type, indicator_code) | 分钟技术指标 |
 | processed_*（统称） | market_data | data_process | data_quality, research_lab, backtest | process_batch_id | 提交后可见 |

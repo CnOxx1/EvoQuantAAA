@@ -291,6 +291,64 @@ class GatewayService:
             self.repo.list_dragon_tiger(trade_date=trade_date, limit=limit)
         )
 
+    def list_equity_bars(
+        self,
+        *,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
+        factor_type: str = "qfq",
+        limit: int = 120,
+    ) -> dict:
+        sym = (symbol or "").strip()
+        if not sym:
+            return fail("BAD_REQUEST", "symbol 必填", status=400)
+        rows = self.repo.list_equity_bars(
+            symbol=sym,
+            start=start,
+            end=end,
+            factor_type=factor_type,
+            limit=limit,
+        )
+        return ok(
+            {
+                "symbol": sym,
+                "factor_type": factor_type or "qfq",
+                "count": len(rows),
+                "bars": rows,
+            }
+        )
+
+    def tech_indicator_meta(self, *, symbol: str | None = None) -> dict:
+        return ok(self.repo.list_tech_indicator_meta(symbol=symbol))
+
+    def list_tech_indicators(
+        self,
+        *,
+        symbol: str,
+        codes: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        factor_type: str = "qfq",
+        limit: int = 180,
+    ) -> dict:
+        sym = (symbol or "").strip()
+        if not sym:
+            return fail("BAD_REQUEST", "symbol 必填", status=400)
+        code_list = None
+        if codes:
+            code_list = [c.strip() for c in codes.split(",") if c.strip()]
+        return ok(
+            self.repo.list_tech_indicators(
+                symbol=sym,
+                codes=code_list,
+                start=start,
+                end=end,
+                factor_type=factor_type,
+                limit=limit,
+            )
+        )
+
     def get_ledger(self, account_id: str, *, as_of: str | None = None) -> dict:
         row = self.repo.get_ledger_account(account_id)
         if not row:

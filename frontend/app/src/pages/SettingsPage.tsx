@@ -1,106 +1,77 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import {
-  DEFAULT_SETTINGS,
-  type Settings,
-  saveSettings,
-} from "../state/settings";
-import styles from "./pages.module.css";
+  Button,
+  Form,
+  Input,
+  Message,
+  Select,
+  Typography,
+} from "@arco-design/web-react";
+import { zh } from "../i18n/zh";
+import { saveSettings, type Settings } from "../state/settings";
 
 export function SettingsPage({
   settings,
-  onChange,
+  onSave,
 }: {
   settings: Settings;
-  onChange: (next: Settings) => void;
+  onSave: (s: Settings) => void;
 }) {
-  const [draft, setDraft] = useState(settings);
-  const [saved, setSaved] = useState(false);
-
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    saveSettings(draft);
-    onChange(draft);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
-  }
+  const [form, setForm] = useState<Settings>(settings);
 
   return (
-    <div>
-      <h1>设置</h1>
-      <p className="lede">
-        连接参数仅保存在本机浏览器，不会写入业务库。若本机 8080
-        被代理占用，请改为网关实际端口（例如 8088）。
-      </p>
-      <form className={`${styles.form} ${styles.panel}`} onSubmit={submit}>
-        <label>
-          网关地址（API Base）
-          <input
-            value={draft.apiBase}
-            onChange={(e) => setDraft({ ...draft, apiBase: e.target.value })}
-            required
+    <div className="page" style={{ maxWidth: 520 }}>
+      <Typography.Title heading={5} style={{ marginTop: 0 }}>
+        {zh.settings}
+      </Typography.Title>
+      <Form layout="vertical">
+        <Form.Item label="API Base" required>
+          <Input
+            value={form.apiBase}
+            onChange={(apiBase) => setForm({ ...form, apiBase })}
             placeholder="http://127.0.0.1:8088"
           />
-        </label>
-        <label>
-          访问令牌（Bearer Token）
-          <input
-            type="password"
-            value={draft.apiToken}
-            onChange={(e) => setDraft({ ...draft, apiToken: e.target.value })}
-            placeholder="未设置 ASHARE_API_TOKEN 时可留空"
-            autoComplete="off"
+        </Form.Item>
+        <Form.Item label={zh.tokenOpt}>
+          <Input.Password
+            value={form.token}
+            onChange={(token) => setForm({ ...form, token })}
           />
-        </label>
-        <label>
-          默认账户
-          <input
-            className="mono"
-            value={draft.accountId}
-            onChange={(e) => setDraft({ ...draft, accountId: e.target.value })}
+        </Form.Item>
+        <Form.Item label={zh.asOf}>
+          <Input
+            value={form.asOf}
+            onChange={(asOf) => setForm({ ...form, asOf })}
           />
-        </label>
-        <label>
-          业务日（as-of）
-          <input
-            type="date"
-            value={draft.asOf}
-            onChange={(e) => setDraft({ ...draft, asOf: e.target.value })}
+        </Form.Item>
+        <Form.Item label={zh.defaultAccount}>
+          <Input
+            value={form.accountId}
+            onChange={(accountId) => setForm({ ...form, accountId })}
           />
-        </label>
-        <label>
-          环境徽章
-          <select
-            value={draft.env}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                env: e.target.value as Settings["env"],
-              })
-            }
-          >
-            <option value="research">研究</option>
-            <option value="paper">纸面</option>
-            <option value="live">实盘（界面锁定提示）</option>
-          </select>
-        </label>
-        <div className={styles.btnRow}>
-          <button type="submit" className={styles.primary}>
-            保存
-          </button>
-          <button
-            type="button"
-            className={styles.secondary}
-            onClick={() => {
-              setDraft({ ...DEFAULT_SETTINGS });
-              saveSettings(DEFAULT_SETTINGS);
-              onChange(DEFAULT_SETTINGS);
-            }}
-          >
-            恢复默认
-          </button>
-          {saved ? <span className={styles.muted}>已保存</span> : null}
-        </div>
-      </form>
+        </Form.Item>
+        <Form.Item label={zh.env}>
+          <Select
+            value={form.env}
+            onChange={(env) => setForm({ ...form, env })}
+            options={[
+              { label: zh.envResearch, value: "research" },
+              { label: zh.envPaper, value: "paper" },
+              { label: zh.envLive, value: "live" },
+            ]}
+          />
+        </Form.Item>
+        <Button
+          type="primary"
+          onClick={() => {
+            saveSettings(form);
+            onSave(form);
+            Message.success(zh.saved);
+          }}
+        >
+          {zh.save}
+        </Button>
+      </Form>
     </div>
   );
 }

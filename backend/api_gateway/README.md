@@ -12,7 +12,7 @@
 
 
 ## 本目录模块一览
-无子模块；本目录即单一模块实现。
+无子模块；本目录即单一模块实现。辅助：`indicator_meta.py`（技术指标分类 / 主图·副图 / 线型推断）。
 
 ## 协作模块索引（供 AI Agent）
 
@@ -25,6 +25,7 @@
 | portfolio_construct | `../portfolio_construct/README.md` | 组合 | 只读聚合 |
 | execution / ledger | `../execution` / `../ledger` | 成交/账本 | 只读聚合 |
 | ops_monitor | `../ops_monitor/README.md` | 告警 | 只读 `ops_alert` |
+| data_process | `../data_process/README.md` | processed 日线/指标 | 只读 `processed_equity_bar_1d` / `processed_tech_indicator_1d` |
 | orchestrator | `../orchestrator/README.md` | 任务触发 | 日更仍走 CLI/schedule（本阶段未暴露启动） |
 
 ## 边界
@@ -59,14 +60,17 @@
 | GET | `/v1/market/ranks/meta` | 榜单可用日期与类型 |
 | GET | `/v1/market/ranks` | 市场榜单 `?trade_date=&rank_type=` |
 | GET | `/v1/market/abnormal` | 盘口异动 |
-| GET | `/v1/market/news` | 新闻/舆情 `?channel=&symbol=` |
+| GET | `/v1/market/news` | 新闻/舆情 `?channel=&symbol=`（symbol 兼容纯代码 / `.SH` 后缀） |
 | GET | `/v1/market/dragon-tiger` | 龙虎榜 |
+| GET | `/v1/market/bars` | 日线 K：`?symbol=&start=&end=&factor_type=qfq&limit=120`（`processed_equity_bar_1d`；symbol 归一化为纯代码） |
+| GET | `/v1/market/indicators/meta` | 指标目录：`code/count/category/placement/style`；可按 `symbol` 过滤 |
+| GET | `/v1/market/indicators` | 日线指标：`?symbol=&codes=MA_5,RSI_14&limit=180`（`processed_tech_indicator_1d` → `series`） |
 | GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 |
 | GET | `/v1/ops/alerts` | 告警 |
 
 鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。  
 生产建议：`ASHARE_API_REQUIRE_TOKEN=1`（未配置 token 时一律 401）。  
-CORS：本地 `frontend/app`（Vite `:5173`）与 `frontend/console`（含 `null` 用于 `file://`）。可对 promote / kill / review 发 POST（Bearer 与只读相同）。
+CORS：本地 `frontend/app`（Vite `:5173`）。可对 promote / kill / review 发 POST（Bearer 与只读相同）。
 
 ## 运行
 
@@ -74,12 +78,13 @@ CORS：本地 `frontend/app`（Vite `:5173`）与 `frontend/console`（含 `null
 cd backend
 pip install -r requirements.txt   # 含 fastapi uvicorn httpx
 python main.py migrate
-python main.py gateway --host 127.0.0.1 --port 8080
-# 文档：http://127.0.0.1:8080/docs
+# 推荐开发端口 8088（避免 8080 被本机代理占用）
+python main.py gateway --host 127.0.0.1 --port 8088
+# 文档：http://127.0.0.1:8088/docs
 # 前端：cd ../frontend/app && npm run dev
-# 或静态：cd ../frontend/console && python -m http.server 8081
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/v1/strategies?status=LIVE
+curl http://127.0.0.1:8088/health
+curl "http://127.0.0.1:8088/v1/market/indicators/meta"
+curl "http://127.0.0.1:8088/v1/market/bars?symbol=600028&limit=5"
 python -m api_gateway.selfcheck
 python main.py e2e
 ```

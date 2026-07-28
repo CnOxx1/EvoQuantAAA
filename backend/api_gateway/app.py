@@ -238,6 +238,57 @@ def create_app() -> Any:
             svc.list_dragon_tiger(trade_date=trade_date, limit=limit)
         )
 
+    @app.get("/v1/market/bars")
+    def market_bars(
+        symbol: str = Query(..., min_length=1, max_length=16),
+        start: str | None = None,
+        end: str | None = None,
+        factor_type: str = Query("qfq"),
+        limit: int = Query(120, ge=1, le=800),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        """日线 K（processed_equity_bar_1d，默认前复权）。"""
+        return _emit(
+            svc.list_equity_bars(
+                symbol=symbol,
+                start=start,
+                end=end,
+                factor_type=factor_type,
+                limit=limit,
+            )
+        )
+
+    @app.get("/v1/market/indicators/meta")
+    def market_indicators_meta(
+        symbol: str | None = None,
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.tech_indicator_meta(symbol=symbol))
+
+    @app.get("/v1/market/indicators")
+    def market_indicators(
+        symbol: str = Query(..., min_length=1, max_length=16),
+        codes: str | None = Query(
+            None, description="逗号分隔，默认 core：MA/MACD/RSI/BOLL"
+        ),
+        start: str | None = None,
+        end: str | None = None,
+        factor_type: str = Query("qfq"),
+        limit: int = Query(180, ge=1, le=800),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        """日线技术指标（processed_tech_indicator_1d）。"""
+        return _emit(
+            svc.list_tech_indicators(
+                symbol=symbol,
+                codes=codes,
+                start=start,
+                end=end,
+                factor_type=factor_type,
+                limit=limit,
+            )
+        )
+
     @app.get("/v1/ledger/accounts/{account_id}")
     def get_ledger(
         account_id: str,

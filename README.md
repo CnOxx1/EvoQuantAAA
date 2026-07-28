@@ -47,13 +47,13 @@
 | 研究与生产隔离 | 实验不可直连执行；须 `strategy_registry` 晋升 + 质量门 |
 | 多 Agent 可协作 | 一 Agent 一模块；只读对方 README 与 `database/` 契约 |
 
-**非目标（当前）**：Tick/L2、宏观全量、ML 因子框架、真实券商柜台直连；前端以运维 SPA 为主（[`frontend/app`](./frontend/app/README.md)），非完整交易产品。
+**非目标（当前）**：Tick/L2、宏观全量、ML 因子框架、真实券商柜台直连；前端为运维 SPA（[`frontend/app`](./frontend/README.md)，Arco Design），非完整交易产品。
 
 ---
 
 ## 2. 当前完成度
 
-**状态（2026-07-28）**：阶段 **1–21**（含 18a/18b、证据冻结、console 写、执行适配器、实盘闸门）已落地；迁移 **`001`–`038`**。纸面全链路可跑；晋升含质量门；运维台可写；**未接**真实柜台（`live_gated` fail-closed）。
+**状态（2026-07-28）**：阶段 **1–21**（含 18a/18b、证据冻结、运维写操作、执行适配器、实盘闸门）已落地；迁移 **`001`–`038`**。纸面全链路可跑；晋升含质量门；**Arco** 运维 SPA 含市场日 K / 全量指标 / 标的上下文；**未接**真实柜台（`live_gated` fail-closed）。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
@@ -67,7 +67,7 @@
 | 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；冲击与回测同口径；残差 pending 续撮 |
 | 执行适配器 | ✅ | `paper` / `broker_stub` / `live_gated`（后两者永不成交） |
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
-| API + E2E + console | ✅ | `/v1`；`python main.py e2e`；`frontend/app` SPA（F1）+ 静态 console |
+| API + E2E + 前端 | ✅ | `/v1`；`python main.py e2e`；`frontend/app`（Arco Design） |
 | 真实券商 SDK | ❌ | 须 `ASHARE_ALLOW_LIVE` + 厂商实现 + `allow_fills`；本机禁止实盘 |
 | 长窗数据回填 | ⏳ | 工具已就绪；勿在本机 ALL_LISTED bulk |
 
@@ -98,10 +98,7 @@ EvoQuantAAA
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
-│   ├── app/                       # F1 React+Vite 运维 SPA（推荐）
-│   ├── console/                   # F0 静态运维台（并行保留）
-│   ├── FRONTEND_DESIGN.md         # 前端设计方案
-│   └── design-mocks/              # UI 效果图
+│   └── app/                       # React + Arco Design 运维 SPA（唯一前端）
 └── scripts/
 ```
 
@@ -178,7 +175,7 @@ daily(CORE±ALPHA)
 | 运维 | ops_monitor | `backend/ops_monitor/` | 告警、coverage | [link](./backend/ops_monitor/README.md) |
 | API | api_gateway | `backend/api_gateway/` | `/v1` BFF | [link](./backend/api_gateway/README.md) |
 | 回归 | e2e / tests | `backend/e2e/` `backend/tests/` | 短窗 E2E；pytest | [e2e](./backend/e2e/README.md) |
-| 前端 | console | `frontend/console/` | 运维台（Kill/晋升/审核） | [frontend](./frontend/README.md) |
+| 前端 | app | `frontend/app/` | Arco 运维 SPA（市场/策略/组合/风控…） | [frontend](./frontend/README.md) |
 
 废弃目录名（勿用）：`research_factor`、`portfolio_risk`。
 
@@ -308,11 +305,10 @@ python main.py strategy show --version <sv_id>
 
 ```bash
 python main.py schedule --once --as-of 2026-07-26   # 非开市日会 skipped
-python main.py gateway --port 8080
-# 另开终端（推荐 F1 SPA）：
+python main.py gateway --host 127.0.0.1 --port 8088
+# 另开终端：
 cd ../frontend/app && npm install && npm run dev
-# 或静态 console：
-cd ../frontend/console && python -m http.server 8081
+# 浏览器 http://127.0.0.1:5173 ；设置页 API Base = http://127.0.0.1:8088
 ```
 
 更多 kind / 子命令：[backend/README.md](./backend/README.md)、[backend/data_ingest/README.md](./backend/data_ingest/README.md)。
@@ -338,7 +334,7 @@ cd ../frontend/console && python -m http.server 8081
 | 残差列表 | `python main.py execution list-pending --account paper_default` |
 | 账本 | `python main.py ledger post --execution ex_…` / `ledger show --account …` |
 | Kill | `python main.py risk kill --on/--off` |
-| 网关 | `python main.py gateway --port 8080` |
+| 网关 | `python main.py gateway --host 127.0.0.1 --port 8088` |
 | 运维台 SPA | `cd ../frontend/app && npm run dev`（http://127.0.0.1:5173） |
 
 ---
@@ -405,11 +401,18 @@ cd ../frontend/console && python -m http.server 8081
 
 ---
 
+### 2026-07-28 · 市场情报：日 K / 全量指标 / 标的上下文
+- **动机**：市场页需看日线与库内技术指标；右侧空白需标的上下文。
+- **迁移**：无（读 `processed_equity_bar_1d` / `processed_tech_indicator_1d`）。
+- **模块**：`api_gateway`（`/v1/market/bars`、`/indicators`、`/indicators/meta` + `indicator_meta.py`）；`frontend/app`（Arco 重建、`ChartPanel` / `IndicatorPicker` / `SymbolContext`）。
+- **行为**：选中标的画前复权蜡烛；预设 + 全量指标选择器（主图≤8 / 副图≤6）；右下行情、指标末值、异动/龙虎/新闻；symbol 归一化纯代码；默认网关 **8088**；移除静态 `frontend/console`。
+- **验收**：`npm run typecheck`；gateway health + indicators meta；文档同步。
+
 ### 2026-07-28 · 前端 F1：运维 SPA
 - **动机**：静态 console 难扩展；需按设计方案落地可路由的纸面生产控制台。
 - **迁移**：无。
-- **模块**：`frontend/app`（React 19 + Vite + TS + TanStack Query）；设计见 `frontend/FRONTEND_DESIGN.md`；效果图 `frontend/design-mocks/`。
-- **行为**：Overview 管道灯带（拼装现有 API）；Strategies 晋升；Portfolio 审核；Risk Kill；Settings；Research/Trade/Ledger/Ops 占位。执行默认只读。
+- **模块**：`frontend/app`（React 19 + Vite + TS + TanStack Query + **Arco Design** + lightweight-charts）。
+- **行为**：Overview 管道灯带；Strategies 晋升；Portfolio 审核；Risk Kill；Settings；Research/Trade/Ledger/Ops；**Market** 情报工作台。
 - **验收**：`npm run typecheck` / `npm run build`；CORS 含 `:5173`；文档同步。
 
 ### 2026-07-28 · 阶段 21：实盘环境闸门

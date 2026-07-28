@@ -5,6 +5,22 @@ from typing import Any
 
 from shared.db import get_conn
 
+from api_gateway.indicator_meta import enrich_indicator_code
+
+
+def _bare_symbol(symbol: str) -> str:
+    """processed 表用纯数字代码；兼容 600000.SH / SH600000。"""
+    s = (symbol or "").strip().upper()
+    for suffix in (".SH", ".SZ", ".BJ"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break
+    if s.startswith(("SH", "SZ", "BJ")) and len(s) >= 8 and s[2:].isdigit():
+        s = s[2:]
+    if "." in s:
+        s = s.split(".", 1)[0]
+    return s
+
 
 class GatewayRepository:
     def list_strategies(
@@ -287,8 +303,15 @@ class GatewayRepository:
             sql += " AND channel=?"
             params.append(channel)
         if symbol:
-            sql += " AND symbol=?"
-            params.append(symbol)
+            sql += " AND (symbol=? OR symbol=? OR symbol LIKE ?)"
+            bare = symbol.strip().upper()
+            for suf in (".SH", ".SZ", ".BJ"):
+                if bare.endswith(suf):
+                    bare = bare[: -len(suf)]
+                    break
+            params.append(symbol.strip())
+            params.append(bare)
+            params.append(f"{bare}.%")
         sql += " ORDER BY publish_time DESC LIMIT ?"
         params.append(max(1, min(limit, 200)))
         with get_conn() as conn:
@@ -325,6 +348,221 @@ class GatewayRepository:
         params.append(max(1, min(limit, 300)))
         with get_conn() as conn:
             return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_equity_bars(
+        self,
+        *,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
+        factor_type: str = "qfq",
+        limit: int = 120,
+    ) -> list[dict[str, Any]]:
+        """日线 K：processed_equity_bar_1d（只读，默认前复权）。"""
+        sym = _bare_symbol(symbol)
+        if not sym:
+            return []
+        ft = (factor_type or "qfq").strip() or "qfq"
+        lim = max(1, min(int(limit), 800))
+        params: list[Any] = [sym, ft]
+        date_clause = ""
+        if start:
+            date_clause += " AND trade_date>=?"
+            params.append(start[:10])
+        if end:
+            date_clause += " AND trade_date<=?"
+            params.append(end[:10])
+        # 无起止时取最近 lim 根；有起止时同样截断 lim（按日期升序返回）
+        sql = f"""
+            SELECT * FROM (
+                SELECT symbol, trade_date, factor_type,
+                       open, high, low, close, volume, amount,
+                       adj_open, adj_high, adj_low, adj_close, adj_factor,
+                       ret_1d, can_buy, can_sell, is_suspended,
+                       is_limit_up, is_limit_down, source
+                FROM processed_equity_bar_1d
+                WHERE symbol=? AND factor_type=?{date_clause}
+                ORDER BY trade_date DESC
+                LIMIT ?
+            ) t
+            ORDER BY trade_date ASC
+        """
+        params.append(lim)
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            # 图表默认用复权 OHLC；缺失则回退未复权
+            o = r.get("adj_open") if r.get("adj_open") is not None else r.get("open")
+            h = r.get("adj_high") if r.get("adj_high") is not None else r.get("high")
+            l = r.get("adj_low") if r.get("adj_low") is not None else r.get("low")
+            c = r.get("adj_close") if r.get("adj_close") is not None else r.get("close")
+            out.append(
+                {
+                    "symbol": r.get("symbol"),
+                    "trade_date": str(r.get("trade_date") or "")[:10],
+                    "factor_type": r.get("factor_type"),
+                    "open": o,
+                    "high": h,
+                    "low": l,
+                    "close": c,
+                    "volume": r.get("volume"),
+                    "amount": r.get("amount"),
+                    "raw_open": r.get("open"),
+                    "raw_high": r.get("high"),
+                    "raw_low": r.get("low"),
+                    "raw_close": r.get("close"),
+                    "adj_factor": r.get("adj_factor"),
+                    "ret_1d": r.get("ret_1d"),
+                    "can_buy": r.get("can_buy"),
+                    "can_sell": r.get("can_sell"),
+                    "is_suspended": r.get("is_suspended"),
+                    "is_limit_up": r.get("is_limit_up"),
+                    "is_limit_down": r.get("is_limit_down"),
+                    "source": r.get("source"),
+                }
+            )
+        return out
+
+    CORE_INDICATOR_CODES: tuple[str, ...] = (
+        "MA_5",
+        "MA_10",
+        "MA_20",
+        "MA_60",
+        "EMA_12",
+        "EMA_26",
+        "MACD_DIF",
+        "MACD_DEA",
+        "MACD_HIST",
+        "RSI_14",
+        "BOLL_MID",
+        "BOLL_UP",
+        "BOLL_LOW",
+    )
+
+    def list_tech_indicator_meta(self, *, symbol: str | None = None) -> dict[str, Any]:
+        params: list[Any] = []
+        where = ""
+        if symbol and symbol.strip():
+            where = " WHERE symbol=?"
+            params.append(_bare_symbol(symbol))
+        with get_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT indicator_code, COUNT(*) AS n
+                FROM processed_tech_indicator_1d
+                {where}
+                GROUP BY indicator_code
+                ORDER BY indicator_code
+                """,
+                tuple(params),
+            ).fetchall()
+        codes = [
+            enrich_indicator_code(
+                str(r["indicator_code"]), count=int(r["n"] or 0)
+            )
+            for r in rows
+        ]
+        core = [
+            c
+            for c in self.CORE_INDICATOR_CODES
+            if any(x["code"] == c for x in codes)
+        ]
+        cats = sorted({str(x["category"]) for x in codes})
+        return {
+            "core_codes": list(core) if core else list(self.CORE_INDICATOR_CODES),
+            "categories": cats,
+            "codes": codes,
+            "total": len(codes),
+        }
+
+    def list_tech_indicators(
+        self,
+        *,
+        symbol: str,
+        codes: list[str] | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        factor_type: str = "qfq",
+        limit: int = 180,
+    ) -> dict[str, Any]:
+        """日线技术指标：processed_tech_indicator_1d（长表 → series）。"""
+        sym = _bare_symbol(symbol)
+        if not sym:
+            return {"symbol": "", "factor_type": factor_type, "series": {}}
+        ft = (factor_type or "qfq").strip() or "qfq"
+        lim = max(1, min(int(limit), 800))
+        want = [c.strip() for c in (codes or list(self.CORE_INDICATOR_CODES)) if c.strip()]
+        if not want:
+            want = list(self.CORE_INDICATOR_CODES)
+        # 先按日期窗口取最近 lim 个交易日（与 bars 对齐）
+        date_params: list[Any] = [sym, ft]
+        date_clause = ""
+        if start:
+            date_clause += " AND trade_date>=?"
+            date_params.append(start[:10])
+        if end:
+            date_clause += " AND trade_date<=?"
+            date_params.append(end[:10])
+        with get_conn() as conn:
+            date_rows = conn.execute(
+                f"""
+                SELECT * FROM (
+                    SELECT DISTINCT trade_date
+                    FROM processed_tech_indicator_1d
+                    WHERE symbol=? AND factor_type=?{date_clause}
+                    ORDER BY trade_date DESC
+                    LIMIT ?
+                ) t ORDER BY trade_date ASC
+                """,
+                (*date_params, lim),
+            ).fetchall()
+            dates = [str(r["trade_date"])[:10] for r in date_rows]
+            if not dates:
+                return {
+                    "symbol": sym,
+                    "factor_type": ft,
+                    "codes": want,
+                    "count": 0,
+                    "series": {c: [] for c in want},
+                }
+            ph_c = ",".join("?" * len(want))
+            ph_d = ",".join("?" * len(dates))
+            rows = conn.execute(
+                f"""
+                SELECT trade_date, indicator_code, value
+                FROM processed_tech_indicator_1d
+                WHERE symbol=? AND factor_type=?
+                  AND indicator_code IN ({ph_c})
+                  AND trade_date IN ({ph_d})
+                ORDER BY trade_date ASC, indicator_code
+                """,
+                (sym, ft, *want, *dates),
+            ).fetchall()
+        series: dict[str, list[dict[str, Any]]] = {c: [] for c in want}
+        for r in rows:
+            code = str(r["indicator_code"])
+            if code not in series:
+                series[code] = []
+            val = r["value"]
+            if val is None:
+                continue
+            try:
+                fv = float(val)
+            except (TypeError, ValueError):
+                continue
+            if not (fv == fv):  # NaN
+                continue
+            series[code].append(
+                {"trade_date": str(r["trade_date"])[:10], "value": fv}
+            )
+        return {
+            "symbol": sym,
+            "factor_type": ft,
+            "codes": want,
+            "count": sum(len(v) for v in series.values()),
+            "series": series,
+        }
 
     def get_ledger_account(self, account_id: str) -> dict[str, Any] | None:
         with get_conn() as conn:

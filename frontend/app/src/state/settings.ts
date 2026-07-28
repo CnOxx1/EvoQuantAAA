@@ -1,26 +1,24 @@
-const STORAGE_KEY = "evoquant.console.settings.v1";
-
-export type EnvMode = "research" | "paper" | "live";
+const KEY = "evoquant.settings.v2";
 
 export type Settings = {
   apiBase: string;
-  apiToken: string;
-  accountId: string;
-  env: EnvMode;
+  token: string;
   asOf: string;
+  accountId: string;
+  env: "research" | "paper" | "live";
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  apiBase: "http://127.0.0.1:8080",
-  apiToken: "",
+  apiBase: "http://127.0.0.1:8088",
+  token: "",
+  asOf: new Date().toISOString().slice(0, 10),
   accountId: "paper_default",
   env: "paper",
-  asOf: new Date().toISOString().slice(0, 10),
 };
 
 export function loadSettings(): Settings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch {
@@ -28,6 +26,6 @@ export function loadSettings(): Settings {
   }
 }
 
-export function saveSettings(next: Settings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+export function saveSettings(s: Settings) {
+  localStorage.setItem(KEY, JSON.stringify(s));
 }
