@@ -3,9 +3,9 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–21**（含证据冻结、执行适配器、实盘闸门）已落地（迁移 `001`–`038`）。  
-**下一优先**：真实券商 SDK（须厂商选型 + `allow_fills` 显式打开；本机仍禁止实盘）/ 长窗数据环境跑 OOS。  
-**入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
+**当前进度**：阶段 **1–21** + **前端 F1 SPA** 已落地（迁移 `001`–`038`）。  
+**下一优先**：前端 F2（Research/Trade/Ledger/Ops）/ 真实券商 SDK / 长窗数据环境跑 OOS。  
+**入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md) · [`frontend/FRONTEND_DESIGN.md`](./frontend/FRONTEND_DESIGN.md)
 
 ---
 
@@ -74,8 +74,11 @@
 | OOS 证据冻结 | walk-forward + `research_evidence_freeze`（迁移 `036`） |
 | 执行适配器 | `paper` / `broker_stub`（迁移 `037`；stub 永不成交） |
 | 实盘闸门 | `live_gated` + `ASHARE_ALLOW_LIVE`（迁移 `038`；武装后仍无 SDK 则拒单） |
-| E2E + console | `python main.py e2e`；`frontend/console` |
+| 前端 F1 | `frontend/app` React SPA（Overview/Strategies/Portfolio/Risk） |
+| E2E + console | `python main.py e2e`；静态 `frontend/console` 并行保留 |
 
+> **前端 F1（2026-07-28）**：`frontend/app` Vite+React 运维台；晋升/Kill/审核经 gateway；执行 UI 只读。下一优先 F2 只读深化。
+>
 > **阶段 21（2026-07-28）**：实盘环境闸门——`live_gated` + `ASHARE_ALLOW_LIVE`；服务层对 `require_live_env=1` fail-closed；永无真实下单/网络/密钥。下一优先：厂商 SDK（独立仓库开关 + allow_fills）。
 >
 > **阶段 20（2026-07-28）**：执行适配器协议——`adapters/` + `broker_stub` dry-run 拒单；CLI `--adapter`；`execution_adapter_params`。禁止真实下单。
@@ -536,6 +539,21 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：migrate `038`；适配器单测绿；全量 pytest；文档与 changelog 同步。
 
+---
+
+## 前端 F1 · 运维 SPA（frontend/app）
+
+### 任务 F1.1 React 控制台
+
+**要求**：
+1. `frontend/app`：React 19 + Vite + TS + TanStack Query + React Router
+2. 页面：Overview / Strategies / Portfolio / Risk / Settings；其余域占位
+3. 写操作：Kill / promote / review（与静态 console 同口径）；执行不下单
+4. 设计：IBM Plex + 石油蓝；见 `FRONTEND_DESIGN.md` / `design-mocks/`
+5. 文档：根 README changelog、frontend README、任务书
+
+**验收**：`npm run typecheck` && `npm run build`；CORS `:5173`；文档同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -576,3 +594,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 19 | 19.1 OOS 冻结 | walk-forward + research_evidence_freeze |
 | 20 | 20.1 执行适配器 | paper / broker_stub 协议 + CLI |
 | 21 | 21.1 实盘闸门 | live_gated + ASHARE_ALLOW_LIVE fail-closed |
+| F1 | F1.1 运维 SPA | frontend/app Overview/Strategies/Portfolio/Risk |

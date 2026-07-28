@@ -9,3 +9,6 @@ venv/
 .pytest_cache/
 _tmp*
 **/_tmp*
+node_modules/
+frontend/.tools/
+frontend/app/dist/

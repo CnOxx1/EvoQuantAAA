@@ -58,7 +58,7 @@
 
 鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。  
 生产建议：`ASHARE_API_REQUIRE_TOKEN=1`（未配置 token 时一律 401）。  
-CORS：本地 console / Vite 源（含 `null` 用于 `file://`）。console 可对 promote / kill / review 发 POST（Bearer 与只读相同）。
+CORS：本地 `frontend/app`（Vite `:5173`）与 `frontend/console`（含 `null` 用于 `file://`）。可对 promote / kill / review 发 POST（Bearer 与只读相同）。
 
 ## 运行
 
@@ -68,7 +68,8 @@ pip install -r requirements.txt   # 含 fastapi uvicorn httpx
 python main.py migrate
 python main.py gateway --host 127.0.0.1 --port 8080
 # 文档：http://127.0.0.1:8080/docs
-# 前端：cd ../frontend/console && python -m http.server 8081
+# 前端：cd ../frontend/app && npm run dev
+# 或静态：cd ../frontend/console && python -m http.server 8081
 curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/v1/strategies?status=LIVE
 python -m api_gateway.selfcheck

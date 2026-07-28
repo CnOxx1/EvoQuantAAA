@@ -47,13 +47,13 @@
 | 研究与生产隔离 | 实验不可直连执行；须 `strategy_registry` 晋升 + 质量门 |
 | 多 Agent 可协作 | 一 Agent 一模块；只读对方 README 与 `database/` 契约 |
 
-**非目标（当前）**：Tick/L2、宏观全量、ML 因子框架、真实券商柜台直连、前端完整产品化（[`frontend/console`](./frontend/console/README.md) 为运维台，非完整产品）。
+**非目标（当前）**：Tick/L2、宏观全量、ML 因子框架、真实券商柜台直连；前端以运维 SPA 为主（[`frontend/app`](./frontend/app/README.md)），非完整交易产品。
 
 ---
 
 ## 2. 当前完成度
 
-**状态（2026-07-28）**：阶段 **1–19**（含 18a/18b、证据冻结、console 写）已落地；迁移 **`001`–`036`**。纸面全链路可跑；晋升含质量门；运维台可写；**未接**真实柜台。
+**状态（2026-07-28）**：阶段 **1–21**（含 18a/18b、证据冻结、console 写、执行适配器、实盘闸门）已落地；迁移 **`001`–`038`**。纸面全链路可跑；晋升含质量门；运维台可写；**未接**真实柜台（`live_gated` fail-closed）。
 
 | 能力域 | 状态 | 说明 |
 | --- | --- | --- |
@@ -67,7 +67,7 @@
 | 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；冲击与回测同口径；残差 pending 续撮 |
 | 执行适配器 | ✅ | `paper` / `broker_stub` / `live_gated`（后两者永不成交） |
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
-| API + E2E + console | ✅ | `/v1`；`python main.py e2e`；运维台含写操作 |
+| API + E2E + console | ✅ | `/v1`；`python main.py e2e`；`frontend/app` SPA（F1）+ 静态 console |
 | 真实券商 SDK | ❌ | 须 `ASHARE_ALLOW_LIVE` + 厂商实现 + `allow_fills`；本机禁止实盘 |
 | 长窗数据回填 | ⏳ | 工具已就绪；勿在本机 ALL_LISTED bulk |
 
@@ -98,7 +98,10 @@ EvoQuantAAA
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
-│   └── console/                   # 运维台（经 api_gateway；含写操作）
+│   ├── app/                       # F1 React+Vite 运维 SPA（推荐）
+│   ├── console/                   # F0 静态运维台（并行保留）
+│   ├── FRONTEND_DESIGN.md         # 前端设计方案
+│   └── design-mocks/              # UI 效果图
 └── scripts/
 ```
 
@@ -301,13 +304,15 @@ python main.py strategy promote --version <sv_id> --to LIVE
 python main.py strategy show --version <sv_id>
 ```
 
-### 10.3 日更与只读台
+### 10.3 日更与运维台
 
 ```bash
 python main.py schedule --once --as-of 2026-07-26   # 非开市日会 skipped
 python main.py gateway --port 8080
-# 另开终端：
-cd frontend/console && python -m http.server 8081
+# 另开终端（推荐 F1 SPA）：
+cd ../frontend/app && npm install && npm run dev
+# 或静态 console：
+cd ../frontend/console && python -m http.server 8081
 ```
 
 更多 kind / 子命令：[backend/README.md](./backend/README.md)、[backend/data_ingest/README.md](./backend/data_ingest/README.md)。
@@ -334,6 +339,7 @@ cd frontend/console && python -m http.server 8081
 | 账本 | `python main.py ledger post --execution ex_…` / `ledger show --account …` |
 | Kill | `python main.py risk kill --on/--off` |
 | 网关 | `python main.py gateway --port 8080` |
+| 运维台 SPA | `cd ../frontend/app && npm run dev`（http://127.0.0.1:5173） |
 
 ---
 
@@ -344,7 +350,7 @@ cd frontend/console && python -m http.server 8081
 3. 跨模块经库交接，只传 ID。  
 4. 调度只经 `orchestrator`；对外只经 `api_gateway`。  
 5. 合入前：本文件 changelog **顶部**追加；更新相关模块 README；勾选 [架构原则 §6](./ARCHITECTURE_PRINCIPLES.md#6-合入前检查清单)。  
-6. 新表 = 新迁移 `034+`；不得改写已发布迁移。
+6. 新表 = 新迁移 `039+`；不得改写已发布迁移。
 
 ---
 
@@ -352,11 +358,12 @@ cd frontend/console && python -m http.server 8081
 
 | 项 | 说明 |
 | --- | --- |
-| 柜台 | 仅 paper；无真实券商适配器 |
+| 柜台 | `paper` 可成交；`broker_stub` / `live_gated` 永不成交；无真实券商 SDK |
 | Sharpe 等 | 回测主表无 Sharpe 列；晋升门暂用 DD/收益/窗/IC |
 | sleeve 回填 | 迁移 `031` 将旧仓写入 `strategy_version=''`；与命名 sleeve 并存时账户合计 NAV 可能偏高（见 [ledger README](./backend/ledger/README.md)） |
-| 开发机数据 | 短窗 / TOP100；覆盖度与实盘研究不可等同 |
+| 开发机数据 | 短窗 / TOP100；覆盖度与实盘研究不可等同；`research_evidence_freeze` 本机通常为 0 |
 | console | 运维台：Kill / 晋升 / 风控审核经 gateway；跳过质量门须原因 |
+| 协作约定迁移号 | §12 仍写「新表=034+」为历史口径；实际新迁移从 **`039`** 起 |
 
 ---
 
@@ -364,8 +371,9 @@ cd frontend/console && python -m http.server 8081
 
 （详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. 真实券商 SDK（厂商选型 + `allow_fills` + 独立环境；本机禁止）  
-2. 在有历史数据的环境跑长窗 OOS + `--freeze`（勿本机 ALL_LISTED bulk）
+1. 前端 F2：Research / Trade / Ledger / Ops 只读深化（补 gateway 列表 API）  
+2. 真实券商 SDK（厂商选型 + `allow_fills` + 独立环境；本机禁止）  
+3. 在有历史数据的环境跑长窗 OOS + `--freeze`（勿本机 ALL_LISTED bulk）
 
 ---
 
@@ -393,8 +401,16 @@ cd frontend/console && python -m http.server 8081
 | 19 | `036` | OOS 证据冻结（walk-forward + freeze 表） |
 | 20 | `037` | 执行适配器 `paper` / `broker_stub` |
 | 21 | `038` | 实盘闸门 `live_gated` + `ASHARE_ALLOW_LIVE` |
+| F1 | （无） | 前端 SPA：`frontend/app` Overview/Strategies/Portfolio/Risk |
 
 ---
+
+### 2026-07-28 · 前端 F1：运维 SPA
+- **动机**：静态 console 难扩展；需按设计方案落地可路由的纸面生产控制台。
+- **迁移**：无。
+- **模块**：`frontend/app`（React 19 + Vite + TS + TanStack Query）；设计见 `frontend/FRONTEND_DESIGN.md`；效果图 `frontend/design-mocks/`。
+- **行为**：Overview 管道灯带（拼装现有 API）；Strategies 晋升；Portfolio 审核；Risk Kill；Settings；Research/Trade/Ledger/Ops 占位。执行默认只读。
+- **验收**：`npm run typecheck` / `npm run build`；CORS 含 `:5173`；文档同步。
 
 ### 2026-07-28 · 阶段 21：实盘环境闸门
 - **动机**：阶段 20 仅有 stub；真实 SDK 前须 fail-closed 环境开关，避免误开实盘路径。
