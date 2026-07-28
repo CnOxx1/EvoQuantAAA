@@ -45,28 +45,50 @@
 | --- | --- | --- |
 | GET | `/health` | 健康检查（无鉴权） |
 | GET | `/v1/strategies` | 策略列表 `?status=` |
-| GET | `/v1/strategies/{version}` | 策略详情 |
+| GET | `/v1/strategies/{version}` | 策略详情（含 `transitions` / `gate_results`） |
 | POST | `/v1/strategies/{version}/promote` | 晋升 `{to, backtest_run?, reason?, skip_gates?, gate_version?}`；质量门失败 400 + meta.failing |
-| GET | `/v1/portfolios` | 组合列表 |
+| GET | `/v1/signal/batches` | 信号批次列表 |
+| POST | `/v1/signal/run` | 纸面/指定版本跑信号 `{as_of, strategy_version?, paper, live}` |
+| GET | `/v1/portfolios` | 组合列表 `?status=&as_of=` |
+| POST | `/v1/portfolios/build` | 构建草稿 `{as_of, strategy_version?, account_id, paper}` |
 | GET | `/v1/portfolios/{id}` | 组合+持仓 |
 | GET | `/v1/risk/kill` | 查询 Kill Switch |
 | POST | `/v1/risk/kill` | 设置 Kill Switch `{scope, is_on, reason?}` |
 | POST | `/v1/risk/review` | `{portfolio_id}` 或 `{drafts, as_of}` |
 | GET | `/v1/risk/decisions` | 决策列表 |
+| GET | `/v1/risk/decisions/{id}` | 决策详情（含 `breaches`） |
 | GET | `/v1/executions` | 执行批次列表 `?account_id=&limit=` |
+| POST | `/v1/executions/run` | 执行 `{portfolio_id}` 或 `{approved, as_of}`；默认 `adapter=paper`（禁 live_gated） |
 | GET | `/v1/executions/{id}` | 执行+委托+成交 |
 | GET | `/v1/execution/pending` | 残差列表 `?account_id=&status=open` |
+| POST | `/v1/execution/pending/resume` | 续撮 `{as_of, account_id, adapter=paper}` |
 | GET | `/v1/research/runs` | 研究运行列表 |
+| GET | `/v1/research/runs/{run_id}` | 研究详情（含 `meta` / `freezes`） |
+| GET | `/v1/backtest/runs` | 回测列表 `?status=&limit=` |
+| GET | `/v1/backtest/runs/{run_id}` | 回测详情（含 `nav` / `trades`） |
+| GET | `/v1/market/search` | 标的搜索 `?q=&as_of=&limit=` |
 | GET | `/v1/market/ranks/meta` | 榜单可用日期与类型 |
 | GET | `/v1/market/ranks` | 市场榜单 `?trade_date=&rank_type=` |
 | GET | `/v1/market/abnormal` | 盘口异动 |
 | GET | `/v1/market/news` | 新闻/舆情 `?channel=&symbol=`（symbol 兼容纯代码 / `.SH` 后缀） |
 | GET | `/v1/market/dragon-tiger` | 龙虎榜 |
-| GET | `/v1/market/bars` | 日线 K：`?symbol=&start=&end=&factor_type=qfq&limit=120`（`processed_equity_bar_1d`；symbol 归一化为纯代码） |
+| GET | `/v1/market/boards` | 板块截面 `?trade_date=&board_type=INDUSTRY|CONCEPT` |
+| GET | `/v1/market/boards/history` | 板块历史 `?board_name=` |
+| GET | `/v1/market/boards/members` | 行业成分 `?industry_name=` |
+| GET | `/v1/market/events` | 事件日历（解禁/公司行为/合同/公告） |
+| GET | `/v1/market/calendar` | 财经日历（交易日 + 宏观/政策资讯） |
+| GET | `/v1/market/f10/{symbol}` | F10 资料聚合 |
+| GET | `/v1/market/bars` | K 线：`?symbol=&freq=1d|15m|60m&factor_type=qfq&limit=` |
 | GET | `/v1/market/indicators/meta` | 指标目录：`code/count/category/placement/style`；可按 `symbol` 过滤 |
 | GET | `/v1/market/indicators` | 日线指标：`?symbol=&codes=MA_5,RSI_14&limit=180`（`processed_tech_indicator_1d` → `series`） |
+| GET | `/v1/data/dq/runs` | DQ 运行列表 |
+| GET | `/v1/data/dq/runs/{id}` | DQ 详情（含规则结果） |
+| GET | `/v1/data/dq/gates` | DQ 门禁 |
+| GET | `/v1/data/coverage` | 覆盖率矩阵 `?start=&end=` |
 | GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 |
+| POST | `/v1/ledger/post` | 过账 `{execution_id}` |
 | GET | `/v1/ops/alerts` | 告警 |
+| GET | `/v1/ops/pipeline` | 总览轻量管道状态（alerts/DQ/signal/portfolio/risk/exec/ledger） |
 
 鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。  
 生产建议：`ASHARE_API_REQUIRE_TOKEN=1`（未配置 token 时一律 401）。  

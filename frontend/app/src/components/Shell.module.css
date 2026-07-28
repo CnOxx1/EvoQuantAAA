@@ -4,13 +4,26 @@
 }
 
 .header {
-  height: 40px !important;
+  height: 44px !important;
   display: flex !important;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 0 12px !important;
   background: var(--color-bg-1) !important;
   border-bottom: 1px solid var(--color-border-2);
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  flex: 1;
+}
+
+.headerRight {
+  flex-shrink: 0;
 }
 
 .brand {
@@ -18,27 +31,84 @@
   font-weight: 600;
   color: rgb(var(--primary-6));
   letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.topNav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.topNavItem,
+.topNavActive {
+  border: none;
+  background: transparent;
+  color: var(--color-text-2);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+
+.topNavItem:hover {
+  color: var(--color-text-1);
+  background: var(--color-fill-2);
+}
+
+.topNavActive {
+  color: rgb(var(--primary-6));
+  font-weight: 600;
+  background: var(--color-primary-light-1);
+}
+
+.searchWrap {
+  position: relative;
+  width: 168px;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  color: var(--color-text-3);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.search {
+  width: 100%;
+}
+
+.search :global(.arco-input) {
+  padding-left: 26px;
+  height: 24px;
+  font-size: 12px;
 }
 
 .meta {
   font-size: 12px;
 }
 
+.body {
+  min-height: calc(100vh - 44px - 28px);
+}
+
 .sider {
   background: var(--color-bg-1) !important;
   border-right: 1px solid var(--color-border-2);
-  min-height: calc(100vh - 40px);
+  min-height: calc(100vh - 44px - 28px);
 }
 
 .sider :global(.arco-layout-sider-children) {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-
-.link {
-  text-decoration: none;
-  color: inherit;
 }
 
 .note {
@@ -52,7 +122,18 @@
 
 .content {
   padding: 0;
-  min-height: calc(100vh - 40px);
+  min-height: calc(100vh - 44px - 28px);
   overflow: auto;
   background: var(--color-fill-2);
 }
+
+.footer {
+  height: 28px !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px !important;
+  background: var(--color-bg-1) !important;
+  border-top: 1px solid var(--color-border-2);
+}
+

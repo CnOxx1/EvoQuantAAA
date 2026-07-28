@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Card,
@@ -10,14 +9,11 @@ import {
   Typography,
 } from "@arco-design/web-react";
 import {
-  getKill,
-  isKillOn,
+  getOpsPipeline,
   listAlerts,
-  listExecutions,
-  listPortfolios,
-  listStrategies,
   type ClientConfig,
 } from "../api/gateway";
+import { PaperPipeline } from "../components/PaperPipeline";
 import { zh } from "../i18n/zh";
 import { s } from "../lib/format";
 import type { Settings } from "../state/settings";
@@ -26,52 +22,27 @@ const { Row, Col } = Grid;
 
 export function OverviewPage({
   cfg,
+  settings,
   connected,
 }: {
   cfg: ClientConfig;
   settings: Settings;
   connected: boolean;
 }) {
-  const stratQ = useQuery({
-    queryKey: ["strategies", cfg.apiBase],
-    queryFn: () => listStrategies(cfg),
+  const pipeQ = useQuery({
+    queryKey: ["pipeline", cfg.apiBase],
+    queryFn: () => getOpsPipeline(cfg),
     enabled: connected,
-  });
-  const portQ = useQuery({
-    queryKey: ["portfolios", cfg.apiBase],
-    queryFn: () => listPortfolios(cfg),
-    enabled: connected,
+    refetchInterval: 30_000,
   });
   const alertQ = useQuery({
     queryKey: ["alerts", cfg.apiBase],
     queryFn: () => listAlerts(cfg, 20),
     enabled: connected,
   });
-  const execQ = useQuery({
-    queryKey: ["executions", cfg.apiBase],
-    queryFn: () => listExecutions(cfg, 20),
-    enabled: connected,
-  });
-  const killQ = useQuery({
-    queryKey: ["kill-ov", cfg.apiBase],
-    queryFn: () => getKill(cfg),
-    enabled: connected,
-  });
 
-  const stages = useMemo(() => {
-    const alerts = alertQ.data?.length ?? 0;
-    const killOn = isKillOn(killQ.data);
-    return [
-      { name: "ingest", ok: true },
-      { name: "process", ok: true },
-      { name: "DQ", ok: alerts === 0 },
-      { name: "signal", ok: (stratQ.data?.length ?? 0) > 0 },
-      { name: "portfolio", ok: (portQ.data?.length ?? 0) > 0 },
-      { name: "risk", ok: !killOn },
-      { name: "exec", ok: (execQ.data?.length ?? 0) > 0 },
-      { name: "ledger", ok: true },
-    ];
-  }, [alertQ.data, killQ.data, stratQ.data, portQ.data, execQ.data]);
+  const stages = pipeQ.data?.stages ?? [];
+  const counts = pipeQ.data?.counts ?? {};
 
   if (!connected) {
     return (
@@ -86,62 +57,71 @@ export function OverviewPage({
       <Typography.Title heading={5} style={{ marginTop: 0 }}>
         {zh.todayPipe}
       </Typography.Title>
-      <Space wrap style={{ marginBottom: 12 }}>
+
+      <PaperPipeline cfg={cfg} settings={settings} connected={connected} />
+
+      <Typography.Title heading={6}>{zh.pipeline}</Typography.Title>
+      <Space wrap style={{ marginBottom: 16 }}>
         {stages.map((st) => (
-          <Tag key={st.name} color={st.ok ? "green" : "orange"}>
-            {st.name}
+          <Tag key={st.name} color={st.ok ? "green" : "red"}>
+            {st.name}: {st.ok ? zh.pipeOk : zh.pipeBad}
+            {st.detail ? ` (${st.detail})` : ""}
           </Tag>
         ))}
+        {pipeQ.isLoading ? (
+          <Typography.Text type="secondary">{zh.loading}</Typography.Text>
+        ) : null}
       </Space>
-      <Row gutter={8} style={{ marginBottom: 12 }}>
+
+      <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small">
-            <Statistic title={zh.strategy} value={stratQ.data?.length ?? 0} />
+            <Statistic
+              title="LIVE"
+              value={counts.live_strategies ?? 0}
+            />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
-            <Statistic title={zh.portfolio} value={portQ.data?.length ?? 0} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small">
-            <Statistic title={zh.execBatch} value={execQ.data?.length ?? 0} />
+            <Statistic title="PAPER" value={counts.paper_strategies ?? 0} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title={zh.kill}
-              value={isKillOn(killQ.data) ? "ON" : "OFF"}
-              styleValue={{
-                color: isKillOn(killQ.data) ? "var(--up)" : "var(--down)",
-              }}
+              title={zh.pending}
+              value={counts.open_pending ?? 0}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small">
+            <Statistic
+              title={zh.openAlerts}
+              value={counts.open_alerts ?? 0}
             />
           </Card>
         </Col>
       </Row>
-      <Card title={zh.openAlerts} size="small">
-        <Table
-          rowKey={(r) => s(r.alert_id ?? r.code ?? JSON.stringify(r))}
-          size="small"
-          pagination={false}
-          scroll={{ y: 360 }}
-          data={alertQ.data ?? []}
-          columns={[
-            { title: zh.level, dataIndex: "severity", width: 80, render: (v) => s(v) },
-            { title: zh.source, dataIndex: "source", width: 120, render: (v) => s(v) },
-            {
-              title: zh.code,
-              dataIndex: "code",
-              width: 120,
-              render: (v) => <code>{s(v)}</code>,
-            },
-            { title: zh.message, dataIndex: "message", render: (v) => s(v) },
-            { title: zh.status, dataIndex: "status", width: 90, render: (v) => s(v) },
-          ]}
-        />
-      </Card>
+
+      <Typography.Title heading={6}>{zh.opsAlerts}</Typography.Title>
+      <Table
+        rowKey={(r) => s(r.alert_id ?? r.id ?? r.created_at)}
+        size="small"
+        loading={alertQ.isLoading}
+        data={alertQ.data ?? []}
+        columns={[
+          {
+            title: zh.level,
+            width: 80,
+            render: (_, r) => <Tag>{s(r.severity ?? r.level)}</Tag>,
+          },
+          { title: zh.source, render: (_, r) => s(r.source ?? r.job_id) },
+          { title: zh.message, render: (_, r) => s(r.message ?? r.title) },
+          { title: zh.time, render: (_, r) => s(r.created_at) },
+        ]}
+      />
     </div>
   );
 }

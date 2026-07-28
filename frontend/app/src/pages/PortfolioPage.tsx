@@ -2,7 +2,9 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
+  Input,
   Message,
+  Select,
   Space,
   Table,
   Tag,
@@ -20,6 +22,7 @@ import type { Settings } from "../state/settings";
 
 export function PortfolioPage({
   cfg,
+  settings,
   connected,
 }: {
   cfg: ClientConfig;
@@ -28,9 +31,15 @@ export function PortfolioPage({
 }) {
   const qc = useQueryClient();
   const [id, setId] = useState("");
+  const [status, setStatus] = useState("");
+  const [asOf, setAsOf] = useState(settings.asOf || "");
   const listQ = useQuery({
-    queryKey: ["portfolios", cfg.apiBase],
-    queryFn: () => listPortfolios(cfg),
+    queryKey: ["portfolios", cfg.apiBase, status, asOf],
+    queryFn: () =>
+      listPortfolios(cfg, {
+        status: status || undefined,
+        asOf: asOf || undefined,
+      }),
     enabled: connected,
   });
   const detailQ = useQuery({
@@ -43,14 +52,13 @@ export function PortfolioPage({
     onSuccess: () => {
       Message.success(zh.reviewOk);
       void qc.invalidateQueries({ queryKey: ["portfolio"] });
+      void qc.invalidateQueries({ queryKey: ["portfolios"] });
     },
     onError: (e: Error) => Message.error(e.message),
   });
 
   const positions =
-    (detailQ.data?.positions as Record<string, unknown>[] | undefined) ??
-    (detailQ.data?.holdings as Record<string, unknown>[] | undefined) ??
-    [];
+    (detailQ.data?.positions as Record<string, unknown>[] | undefined) ?? [];
 
   if (!connected) {
     return (
@@ -62,9 +70,27 @@ export function PortfolioPage({
 
   return (
     <div className="page">
-      <Typography.Title heading={5} style={{ marginTop: 0 }}>
-        {zh.portfolio}
-      </Typography.Title>
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Typography.Title heading={5} style={{ margin: 0 }}>
+          {zh.portfolio}
+        </Typography.Title>
+        <Select
+          size="small"
+          allowClear
+          placeholder={zh.filterStatus}
+          style={{ width: 140 }}
+          value={status || undefined}
+          onChange={(v) => setStatus(v || "")}
+          options={["draft", "approved", "executed", "rejected"]}
+        />
+        <Input
+          size="small"
+          style={{ width: 140 }}
+          placeholder={zh.asOfFilter}
+          value={asOf}
+          onChange={setAsOf}
+        />
+      </Space>
       <Table
         rowKey={(r) => s(r.portfolio_id)}
         size="small"
@@ -85,14 +111,17 @@ export function PortfolioPage({
             render: (_, r) => <Tag>{s(r.status)}</Tag>,
           },
           { title: zh.account, render: (_, r) => s(r.account_id) },
-          { title: "as_of", render: (_, r) => s(r.as_of) },
+          {
+            title: "as_of",
+            render: (_, r) => s(r.as_of_date ?? r.as_of),
+          },
         ]}
       />
       {id ? (
         <>
           <Space style={{ marginBottom: 8 }}>
             <Typography.Text>
-              {zh.holdings} � {id}
+              {zh.holdings} / {id}
             </Typography.Text>
             <Button
               size="mini"

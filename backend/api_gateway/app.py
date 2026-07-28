@@ -5,7 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from api_gateway.auth import check_bearer
-from api_gateway.schemas import KillBody, PromoteBody, ReviewBody
+from api_gateway.schemas import (
+    ExecutionRunBody,
+    KillBody,
+    LedgerPostBody,
+    PortfolioBuildBody,
+    PromoteBody,
+    ResumePendingBody,
+    ReviewBody,
+    SignalRunBody,
+)
 from api_gateway.service import GatewayService
 
 
@@ -91,6 +100,34 @@ def create_app() -> Any:
             )
         )
 
+    @app.get("/v1/signal/batches")
+    def signal_batches(
+        strategy_version: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_signal_batches(
+                strategy_version=strategy_version, limit=limit
+            )
+        )
+
+    @app.post("/v1/signal/run")
+    def signal_run(
+        payload: SignalRunBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.run_signal(
+                as_of=payload.as_of,
+                strategy_version=payload.strategy_version,
+                paper=payload.paper,
+                live=payload.live,
+                require_dq=payload.require_dq,
+                actor=actor,
+            )
+        )
+
     @app.get("/v1/portfolios")
     def list_portfolios(
         status: str | None = None,
@@ -100,6 +137,26 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         return _emit(
             svc.list_portfolios(status=status, as_of=as_of, limit=limit)
+        )
+
+    @app.post("/v1/portfolios/build")
+    def portfolios_build(
+        payload: PortfolioBuildBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.build_portfolio(
+                as_of=payload.as_of,
+                strategy_version=payload.strategy_version,
+                account_id=payload.account_id,
+                paper=payload.paper,
+                live=payload.live,
+                nav=payload.nav,
+                use_ledger_nav=payload.use_ledger_nav,
+                force=payload.force,
+                signal_batch_id=payload.signal_batch_id,
+                actor=actor,
+            )
         )
 
     @app.get("/v1/portfolios/{portfolio_id}")
@@ -151,6 +208,12 @@ def create_app() -> Any:
             svc.list_decisions(portfolio_id=portfolio_id, limit=limit)
         )
 
+    @app.get("/v1/risk/decisions/{decision_id}")
+    def risk_decision_detail(
+        decision_id: str, _: str = Depends(require_actor)
+    ) -> dict[str, Any]:
+        return _emit(svc.get_decision(decision_id))
+
     @app.get("/v1/executions")
     def list_executions(
         account_id: str | None = None,
@@ -159,6 +222,23 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         return _emit(
             svc.list_executions(account_id=account_id, limit=limit)
+        )
+
+    @app.post("/v1/executions/run")
+    def executions_run(
+        payload: ExecutionRunBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.run_execution(
+                portfolio_id=payload.portfolio_id,
+                approved=payload.approved,
+                as_of=payload.as_of,
+                account_id=payload.account_id,
+                adapter=payload.adapter,
+                force=payload.force,
+                actor=actor,
+            )
         )
 
     @app.get("/v1/executions/{execution_id}")
@@ -180,12 +260,169 @@ def create_app() -> Any:
             )
         )
 
+    @app.post("/v1/execution/pending/resume")
+    def pending_resume(
+        payload: ResumePendingBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.resume_pending(
+                as_of=payload.as_of,
+                account_id=payload.account_id,
+                adapter=payload.adapter,
+                strategy_version=payload.strategy_version,
+                actor=actor,
+            )
+        )
+
     @app.get("/v1/research/runs")
     def list_research_runs(
         limit: int = Query(50, ge=1, le=200),
         _: str = Depends(require_actor),
     ) -> dict[str, Any]:
         return _emit(svc.list_research_runs(limit=limit))
+
+    @app.get("/v1/research/runs/{run_id}")
+    def research_run_detail(
+        run_id: str, _: str = Depends(require_actor)
+    ) -> dict[str, Any]:
+        return _emit(svc.get_research_run(run_id))
+
+    @app.get("/v1/backtest/runs")
+    def list_backtests(
+        status: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_backtest_runs(status=status, limit=limit))
+
+    @app.get("/v1/backtest/runs/{run_id}")
+    def backtest_detail(
+        run_id: str, _: str = Depends(require_actor)
+    ) -> dict[str, Any]:
+        return _emit(svc.get_backtest_run(run_id))
+
+    @app.get("/v1/market/search")
+    def market_search(
+        q: str = Query(..., min_length=1, max_length=64),
+        as_of: str | None = None,
+        limit: int = Query(20, ge=1, le=50),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.search_securities(q=q, as_of=as_of, limit=limit))
+
+    @app.get("/v1/market/boards")
+    def market_boards(
+        trade_date: str | None = None,
+        board_type: str | None = None,
+        limit: int = Query(100, ge=1, le=500),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_boards(
+                trade_date=trade_date, board_type=board_type, limit=limit
+            )
+        )
+
+    @app.get("/v1/market/boards/history")
+    def market_board_history(
+        board_name: str = Query(..., min_length=1),
+        board_type: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = Query(120, ge=1, le=500),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_board_history(
+                board_name=board_name,
+                board_type=board_type,
+                start=start,
+                end=end,
+                limit=limit,
+            )
+        )
+
+    @app.get("/v1/market/boards/members")
+    def market_board_members(
+        industry_name: str | None = None,
+        industry_code: str | None = None,
+        as_of: str | None = None,
+        limit: int = Query(200, ge=1, le=500),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_board_members(
+                industry_name=industry_name,
+                industry_code=industry_code,
+                as_of=as_of,
+                limit=limit,
+            )
+        )
+
+    @app.get("/v1/market/events")
+    def market_events(
+        start: str | None = None,
+        end: str | None = None,
+        symbol: str | None = None,
+        limit: int = Query(100, ge=1, le=300),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_market_events(
+                start=start, end=end, symbol=symbol, limit=limit
+            )
+        )
+
+    @app.get("/v1/market/calendar")
+    def market_calendar(
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = Query(100, ge=1, le=300),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_econ_calendar(start=start, end=end, limit=limit)
+        )
+
+    @app.get("/v1/market/f10/{symbol}")
+    def market_f10(
+        symbol: str,
+        as_of: str | None = None,
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.get_f10(symbol, as_of=as_of))
+
+    @app.get("/v1/data/dq/runs")
+    def dq_runs(
+        scope: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_dq_runs(scope=scope, limit=limit))
+
+    @app.get("/v1/data/dq/runs/{dq_run_id}")
+    def dq_run_detail(
+        dq_run_id: str, _: str = Depends(require_actor)
+    ) -> dict[str, Any]:
+        return _emit(svc.get_dq_run(dq_run_id))
+
+    @app.get("/v1/data/dq/gates")
+    def dq_gates(
+        scope: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_dq_gates(scope=scope, limit=limit))
+
+    @app.get("/v1/data/coverage")
+    def data_coverage(
+        start: str = Query(..., min_length=8, max_length=10),
+        end: str = Query(..., min_length=8, max_length=10),
+        symbols: str | None = None,
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.data_coverage(start=start, end=end, symbols=symbols))
 
     @app.get("/v1/market/ranks/meta")
     def market_ranks_meta(_: str = Depends(require_actor)) -> dict[str, Any]:
@@ -244,16 +481,18 @@ def create_app() -> Any:
         start: str | None = None,
         end: str | None = None,
         factor_type: str = Query("qfq"),
-        limit: int = Query(120, ge=1, le=800),
+        freq: str = Query("1d", description="1d | 15m | 60m"),
+        limit: int = Query(120, ge=1, le=2000),
         _: str = Depends(require_actor),
     ) -> dict[str, Any]:
-        """日线 K（processed_equity_bar_1d，默认前复权）。"""
+        """K 线：日线 processed_equity_bar_1d；分钟线 processed_equity_bar_min。"""
         return _emit(
             svc.list_equity_bars(
                 symbol=symbol,
                 start=start,
                 end=end,
                 factor_type=factor_type,
+                freq=freq,
                 limit=limit,
             )
         )
@@ -297,12 +536,30 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         return _emit(svc.get_ledger(account_id, as_of=as_of))
 
+    @app.post("/v1/ledger/post")
+    def ledger_post(
+        payload: LedgerPostBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.post_ledger(
+                execution_id=payload.execution_id,
+                account_id=payload.account_id,
+                force=payload.force,
+                actor=actor,
+            )
+        )
+
     @app.get("/v1/ops/alerts")
     def ops_alerts(
         limit: int = Query(20, ge=1, le=100),
         _: str = Depends(require_actor),
     ) -> dict[str, Any]:
         return _emit(svc.list_alerts(limit=limit))
+
+    @app.get("/v1/ops/pipeline")
+    def ops_pipeline(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.ops_pipeline())
 
     @app.get("/")
     def root() -> dict[str, Any]:

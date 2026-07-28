@@ -401,6 +401,13 @@ cd ../frontend/app && npm install && npm run dev
 
 ---
 
+### 2026-07-28 · 前端补齐：详情做深 + 纸面闭环
+- **动机**：网关只读详情薄；纸面生产链仅 CLI。
+- **迁移**：无。
+- **模块**：`api_gateway`（策略/研究/决策详情、`/v1/ops/pipeline`；`signal/run`、`portfolios/build`、`executions/run`、`pending/resume`、`ledger/post`）；`frontend/app` 详情抽屉 + 总览纸面流水线。
+- **行为**：一期详情可读 transitions/gate/breaches/freezes；总览管道非恒绿。二期纸面按钮跑 signal→build→review→exec（禁 live_gated）；Trade 续撮/过账；`env=live` 锁定写。
+- **验收**：`npm run typecheck`；gateway `/v1/ops/pipeline` 与策略详情 200；文档同步。
+
 ### 2026-07-28 · 市场情报：日 K / 全量指标 / 标的上下文
 - **动机**：市场页需看日线与库内技术指标；右侧空白需标的上下文。
 - **迁移**：无（读 `processed_equity_bar_1d` / `processed_tech_indicator_1d`）。

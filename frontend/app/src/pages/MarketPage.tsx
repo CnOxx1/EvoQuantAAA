@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Button,
+  Drawer,
   Input,
   Message,
   Select,
@@ -11,6 +14,7 @@ import {
   Typography,
 } from "@arco-design/web-react";
 import {
+  getF10,
   getMarketIndicatorsMeta,
   getMarketRankMeta,
   listAbnormalMoves,
@@ -76,20 +80,33 @@ export function MarketPage({
   cfg,
   settings,
   connected,
+  initialTab = "ranks",
 }: {
   cfg: ClientConfig;
   settings: Settings;
   connected: boolean;
+  initialTab?: TabKey;
 }) {
-  const [tab, setTab] = useState<TabKey>("ranks");
+  const [searchParams] = useSearchParams();
+  const urlSymbol = (searchParams.get("symbol") || "").trim();
+  const [tab, setTab] = useState<TabKey>(initialTab);
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
   const [tradeDate, setTradeDate] = useState("");
   const [rankType, setRankType] = useState("PCT_CHG_UP");
   const [newsChannel, setNewsChannel] = useState("");
   const [symbolQ, setSymbolQ] = useState("");
   const [abnFilter, setAbnFilter] = useState("");
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(urlSymbol);
+  const [barFreq, setBarFreq] = useState<"1d" | "15m" | "60m">("1d");
+  const [f10Open, setF10Open] = useState(false);
   const [activeInd, setActiveInd] = useState<string[]>(DEFAULT_ACTIVE);
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  useEffect(() => {
+    if (urlSymbol) setSelected(urlSymbol);
+  }, [urlSymbol]);
 
   const indMetaQ = useQuery({
     queryKey: ["ind-meta", cfg.apiBase],
@@ -211,19 +228,26 @@ export function MarketPage({
   }, [lhbQ.data, sym]);
 
   useEffect(() => {
-    setSelected("");
-  }, [tab, effectiveDate, rankType]);
+    if (!urlSymbol) setSelected("");
+  }, [tab, effectiveDate, rankType, urlSymbol]);
 
   const barsQ = useQuery({
-    queryKey: ["bars", cfg.apiBase, selected, effectiveDate],
+    queryKey: ["bars", cfg.apiBase, selected, effectiveDate, barFreq],
     queryFn: () =>
       listMarketBars(cfg, {
         symbol: selected,
         end: effectiveDate || undefined,
         factorType: "qfq",
-        limit: 180,
+        freq: barFreq,
+        limit: barFreq === "1d" ? 180 : 480,
       }),
     enabled: connected && Boolean(selected),
+  });
+
+  const f10Q = useQuery({
+    queryKey: ["f10", cfg.apiBase, selected, settings.asOf],
+    queryFn: () => getF10(cfg, selected, settings.asOf),
+    enabled: connected && Boolean(selected) && f10Open,
   });
 
   const indQ = useQuery({
@@ -242,28 +266,50 @@ export function MarketPage({
         factorType: "qfq",
         limit: 180,
       }),
-    enabled: connected && Boolean(selected) && activeInd.length > 0,
+    enabled:
+      connected &&
+      Boolean(selected) &&
+      activeInd.length > 0 &&
+      barFreq === "1d",
   });
 
   const candles: CandlePoint[] = useMemo(() => {
     const bars = barsQ.data?.bars ?? [];
     return bars
-      .map((b) => ({
-        time: String(b.trade_date || "").slice(0, 10),
-        open: Number(b.open),
-        high: Number(b.high),
-        low: Number(b.low),
-        close: Number(b.close),
-      }))
-      .filter(
-        (c) =>
-          /^\d{4}-\d{2}-\d{2}$/.test(c.time) &&
+      .map((b) => {
+        if (barFreq === "1d") {
+          return {
+            time: String(b.trade_date || "").slice(0, 10),
+            open: Number(b.open),
+            high: Number(b.high),
+            low: Number(b.low),
+            close: Number(b.close),
+          };
+        }
+        const raw = String(b.bar_time || b.trade_date || "");
+        const ts = Math.floor(new Date(raw.replace(" ", "T") + "+08:00").getTime() / 1000);
+        return {
+          time: ts,
+          open: Number(b.open),
+          high: Number(b.high),
+          low: Number(b.low),
+          close: Number(b.close),
+        };
+      })
+      .filter((c) => {
+        const timeOk =
+          typeof c.time === "number"
+            ? Number.isFinite(c.time) && c.time > 0
+            : /^\d{4}-\d{2}-\d{2}$/.test(c.time);
+        return (
+          timeOk &&
           Number.isFinite(c.open) &&
           Number.isFinite(c.high) &&
           Number.isFinite(c.low) &&
-          Number.isFinite(c.close),
-      );
-  }, [barsQ.data]);
+          Number.isFinite(c.close)
+        );
+      });
+  }, [barsQ.data, barFreq]);
 
   const toLine = (code: string): LinePoint[] =>
     (indQ.data?.series?.[code] ?? [])
@@ -271,10 +317,15 @@ export function MarketPage({
         time: String(p.trade_date || "").slice(0, 10),
         value: Number(p.value),
       }))
-      .filter((p) => /^\d{4}-\d{2}-\d{2}$/.test(p.time) && Number.isFinite(p.value));
+      .filter(
+        (p) =>
+          typeof p.time === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(p.time) &&
+          Number.isFinite(p.value),
+      );
 
   const overlays: OverlayLine[] = useMemo(() => {
-    if (!selected) return [];
+    if (!selected || barFreq !== "1d") return [];
     return activeInd
       .filter((c) => placementOf(c, metaByCode) === "overlay")
       .map((code, i) => ({
@@ -284,10 +335,10 @@ export function MarketPage({
         lineWidth: code === "MA_20" || code === "BOLL_MID" ? 2 : 1,
       }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, activeInd, indQ.data, metaByCode]);
+  }, [selected, activeInd, indQ.data, metaByCode, barFreq]);
 
   const subPane: SubPane = useMemo(() => {
-    if (!selected) return { kind: "none" };
+    if (!selected || barFreq !== "1d") return { kind: "none" };
     const series = activeInd
       .filter((c) => placementOf(c, metaByCode) === "sub")
       .map((code, i) => ({
@@ -299,7 +350,7 @@ export function MarketPage({
     if (!series.length) return { kind: "none" };
     return { kind: "multi", series };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, activeInd, indQ.data, metaByCode]);
+  }, [selected, activeInd, indQ.data, metaByCode, barFreq]);
 
   const lastBar = useMemo(() => {
     const bars = barsQ.data?.bars ?? [];
@@ -649,10 +700,31 @@ export function MarketPage({
         </div>
 
         <div className={styles.side}>
+          {selected ? (
+            <Space style={{ marginBottom: 8 }} size={8} wrap>
+              <Select
+                size="mini"
+                value={barFreq}
+                style={{ width: 88 }}
+                onChange={(v) => setBarFreq(v as "1d" | "15m" | "60m")}
+                options={[
+                  { label: "日K", value: "1d" },
+                  { label: "15m", value: "15m" },
+                  { label: "60m", value: "60m" },
+                ]}
+              />
+              <Button size="mini" type="outline" onClick={() => setF10Open(true)}>
+                F10
+              </Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {selectedName || selected}
+              </Typography.Text>
+            </Space>
+          ) : null}
           <ChartPanel
             title={
               selected
-                ? `${zh.klineQfq} ${selected}`
+                ? `${barFreq === "1d" ? zh.klineQfq : barFreq} ${selected}`
                 : tab === "ranks"
                   ? zh.crossSection
                   : tab === "lhb"
@@ -665,10 +737,10 @@ export function MarketPage({
               selected
                 ? barsQ.isLoading
                   ? zh.barsLoading
-                  : indQ.isLoading
+                  : indQ.isLoading && barFreq === "1d"
                     ? zh.indLoading
-                    : `${zh.klineQfq} / n=${candles.length}${
-                        activeInd.length
+                    : `${barFreq} / n=${candles.length}${
+                        barFreq === "1d" && activeInd.length
                           ? ` / ind=${activeInd.length}`
                           : ""
                       }`
@@ -739,6 +811,46 @@ export function MarketPage({
             indSeries={indQ.data?.series ?? {}}
             activeCodes={activeInd}
           />
+          <Drawer
+            width={480}
+            title={`F10 ${selected}`}
+            visible={f10Open}
+            onCancel={() => setF10Open(false)}
+            footer={null}
+          >
+            {f10Q.isLoading ? (
+              <Typography.Text type="secondary">加载中…</Typography.Text>
+            ) : f10Q.data ? (
+              <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                {(
+                  [
+                    ["上市资料", f10Q.data.listing],
+                    ["行业", f10Q.data.industry],
+                    ["估值", f10Q.data.valuation],
+                    ["财务", f10Q.data.fundamentals],
+                    ["股东", f10Q.data.holders],
+                    ["股本", f10Q.data.share_capital],
+                  ] as [string, unknown][]
+                ).map(([title, block]) => (
+                  <div key={title}>
+                    <Typography.Text bold>{title}</Typography.Text>
+                    <pre
+                      style={{
+                        margin: "6px 0 0",
+                        fontSize: 12,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {block ? JSON.stringify(block, null, 2) : "—"}
+                    </pre>
+                  </div>
+                ))}
+              </Space>
+            ) : (
+              <Typography.Text type="secondary">无资料</Typography.Text>
+            )}
+          </Drawer>
         </div>
       </div>
     </div>

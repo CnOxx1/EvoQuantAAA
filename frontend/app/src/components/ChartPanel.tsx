@@ -14,14 +14,14 @@ import styles from "./ChartPanel.module.css";
 export type ChartPoint = { time: number; value: number; color?: string };
 
 export type CandlePoint = {
-  time: string;
+  time: string | number;
   open: number;
   high: number;
   low: number;
   close: number;
 };
 
-export type LinePoint = { time: string; value: number };
+export type LinePoint = { time: string | number; value: number };
 
 export type OverlayLine = {
   id: string;

@@ -76,8 +76,11 @@
 | 实盘闸门 | `live_gated` + `ASHARE_ALLOW_LIVE`（迁移 `038`；武装后仍无 SDK 则拒单） |
 | 前端（Arco） | `frontend/app`：React 19 + Arco Design + lightweight-charts |
 | 市场情报 UI | 日 K + 全量指标选择器（meta≈279）+ 右下标的上下文 |
+| 运维台深化 | 策略/研究/决策详情；`/v1/ops/pipeline`；纸面流水线写接口 |
 | E2E | `python main.py e2e` |
 
+> **运维台深化（2026-07-28）**：一期详情（transitions/gate/breaches/freezes + pipeline）；二期纸面闭环 POST（signal/build/exec/resume/post，禁 live_gated）。
+>
 > **市场情报（2026-07-28）**：`/v1/market/bars` + `/v1/market/indicators`（含 meta 分类/主图副图）；前端市场页蜡烛图、指标预设/全量选择器、右下行情·指标末值·异动/龙虎/新闻上下文。默认网关端口 **8088**。
 >
 > **前端（2026-07-28）**：选定方案 B，重建 `frontend/app`（Arco Design）；静态 `frontend/console` 已移除。

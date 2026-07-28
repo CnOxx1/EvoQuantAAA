@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
+  Drawer,
   Input,
   Message,
   Popconfirm,
@@ -11,11 +12,13 @@ import {
   Typography,
 } from "@arco-design/web-react";
 import {
+  getDecision,
   getKill,
   isKillOn,
   listDecisions,
   setKill,
   type ClientConfig,
+  type JsonMap,
 } from "../api/gateway";
 import { zh } from "../i18n/zh";
 import { s } from "../lib/format";
@@ -31,6 +34,7 @@ export function RiskPage({
 }) {
   const qc = useQueryClient();
   const [reason, setReason] = useState("");
+  const [decId, setDecId] = useState("");
   const killQ = useQuery({
     queryKey: ["kill", cfg.apiBase],
     queryFn: () => getKill(cfg),
@@ -41,12 +45,17 @@ export function RiskPage({
     queryFn: () => listDecisions(cfg, 50),
     enabled: connected,
   });
+  const detailQ = useQuery({
+    queryKey: ["decision", cfg.apiBase, decId],
+    queryFn: () => getDecision(cfg, decId),
+    enabled: connected && Boolean(decId),
+  });
   const on = isKillOn(killQ.data);
   const mut = useMutation({
     mutationFn: (isOn: boolean) =>
       setKill(cfg, {
-        scope: "global",
-        is_on: isOn ? 1 : 0,
+        scope: "GLOBAL",
+        is_on: isOn,
         reason: reason || undefined,
       }),
     onSuccess: () => {
@@ -55,6 +64,9 @@ export function RiskPage({
     },
     onError: (e: Error) => Message.error(e.message),
   });
+
+  const d = detailQ.data;
+  const breaches = (d?.breaches as JsonMap[] | undefined) ?? [];
 
   if (!connected) {
     return (
@@ -90,12 +102,13 @@ export function RiskPage({
       </Space>
       <Typography.Title heading={6}>{zh.decisions}</Typography.Title>
       <Table
-        rowKey={(r) =>
-          `${s(r.decision_id)}-${s(r.created_at ?? r.ts)}-${s(r.portfolio_id)}`
-        }
+        rowKey={(r) => s(r.decision_id)}
         size="small"
         loading={decQ.isLoading}
         data={decQ.data ?? []}
+        onRow={(r) => ({
+          onClick: () => setDecId(s(r.decision_id, "")),
+        })}
         columns={[
           { title: zh.time, render: (_, r) => s(r.created_at ?? r.ts) },
           {
@@ -110,9 +123,57 @@ export function RiskPage({
             ),
           },
           { title: zh.portfolio, render: (_, r) => s(r.portfolio_id) },
-          { title: zh.reason, render: (_, r) => s(r.reason ?? r.message) },
+          {
+            title: zh.breaches,
+            width: 80,
+            render: (_, r) => s(r.breach_count),
+          },
         ]}
       />
+
+      <Drawer
+        width={460}
+        title={`${zh.detail} ${decId}`}
+        visible={Boolean(decId)}
+        onCancel={() => setDecId("")}
+        footer={null}
+      >
+        {detailQ.isLoading ? (
+          <Typography.Text type="secondary">{zh.loading}</Typography.Text>
+        ) : d ? (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <div>
+              <Tag
+                color={String(d.status).includes("reject") ? "red" : "green"}
+              >
+                {s(d.status)}
+              </Tag>{" "}
+              <code>{s(d.portfolio_id)}</code>
+            </div>
+            <div>
+              account <code>{s(d.account_id)}</code> / as_of {s(d.as_of_date)}
+            </div>
+            <div>
+              <Typography.Text bold>
+                {zh.breaches} · {breaches.length}
+              </Typography.Text>
+              {breaches.length ? (
+                <pre style={{ fontSize: 11, whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify(breaches, null, 2)}
+                </pre>
+              ) : (
+                <Typography.Text type="secondary">{zh.ctxNone}</Typography.Text>
+              )}
+            </div>
+            <div>
+              <Typography.Text bold>{zh.meta}</Typography.Text>
+              <pre style={{ fontSize: 11, whiteSpace: "pre-wrap" }}>
+                {JSON.stringify(d.meta ?? {}, null, 2)}
+              </pre>
+            </div>
+          </Space>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

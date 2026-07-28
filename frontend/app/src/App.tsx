@@ -16,6 +16,12 @@ import { TradePage } from "./pages/TradePage";
 import { LedgerPage } from "./pages/LedgerPage";
 import { OpsPage } from "./pages/OpsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { BacktestPage } from "./pages/BacktestPage";
+import { BoardsPage } from "./pages/BoardsPage";
+import { EventsPage } from "./pages/EventsPage";
+import { CalendarPage } from "./pages/CalendarPage";
+import { DataQualityPage } from "./pages/DataQualityPage";
+import { CoveragePage } from "./pages/CoveragePage";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -57,18 +63,38 @@ function AppInner() {
               kill={killQ.data}
               connected={connected}
               onRefresh={refresh}
+              cfg={cfg}
             />
           }
         >
           <Route path="/" element={<OverviewPage {...pageProps} />} />
-          <Route path="/market" element={<MarketPage {...pageProps} />} />
+
+          <Route path="/market" element={<Navigate to="/market/monitor" replace />} />
+          <Route
+            path="/market/overview"
+            element={<MarketPage {...pageProps} initialTab="ranks" />}
+          />
+          <Route
+            path="/market/monitor"
+            element={<MarketPage {...pageProps} initialTab="abnormal" />}
+          />
+          <Route path="/market/boards" element={<BoardsPage {...pageProps} />} />
+          <Route path="/market/events" element={<EventsPage {...pageProps} />} />
+          <Route path="/market/calendar" element={<CalendarPage {...pageProps} />} />
+
           <Route path="/strategies" element={<StrategiesPage {...pageProps} />} />
-          <Route path="/portfolio" element={<PortfolioPage {...pageProps} />} />
-          <Route path="/risk" element={<RiskPage {...pageProps} />} />
           <Route path="/research" element={<ResearchPage {...pageProps} />} />
-          <Route path="/trade" element={<TradePage {...pageProps} />} />
+          <Route path="/backtest" element={<BacktestPage {...pageProps} />} />
+
+          <Route path="/portfolio" element={<PortfolioPage {...pageProps} />} />
           <Route path="/ledger" element={<LedgerPage {...pageProps} />} />
+          <Route path="/trade" element={<TradePage {...pageProps} />} />
+          <Route path="/risk" element={<RiskPage {...pageProps} />} />
+
           <Route path="/ops" element={<OpsPage {...pageProps} />} />
+          <Route path="/data/quality" element={<DataQualityPage {...pageProps} />} />
+          <Route path="/data/coverage" element={<CoveragePage {...pageProps} />} />
+
           <Route
             path="/settings"
             element={
