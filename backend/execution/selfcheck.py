@@ -23,9 +23,16 @@ def _run_mock() -> None:
     assert abs(fill_price("SELL", 10.0, cost) - 9.995) < 1e-9
     assert commission(1000, cost) == 5.0  # min
 
+    import os
+
     from execution.adapters import get_adapter
     from execution.adapters.base import AdapterContext
     from execution.adapters.broker_stub import REJECT_REASON
+    from execution.adapters.live_gate import (
+        LIVE_ENV_FLAG,
+        LIVE_ENV_NOT_ARMED,
+        LIVE_SDK_NOT_CONFIGURED,
+    )
 
     stub_orders, stub_fills = get_adapter("broker_stub").execute(
         [
@@ -41,6 +48,40 @@ def _run_mock() -> None:
     )
     assert stub_fills == []
     assert stub_orders[0]["reason"] == REJECT_REASON
+
+    os.environ.pop(LIVE_ENV_FLAG, None)
+    live_orders, live_fills = get_adapter("live_gated").execute(
+        [
+            {
+                "symbol": "A",
+                "side": "BUY",
+                "qty": 100,
+                "reject": False,
+                "mid_price": 10.0,
+            }
+        ],
+        AdapterContext(cost=cost, trade_date="2026-07-28", cash=10_000),
+    )
+    assert live_fills == []
+    assert live_orders[0]["reason"] == LIVE_ENV_NOT_ARMED
+    os.environ[LIVE_ENV_FLAG] = "1"
+    try:
+        live2, fills2 = get_adapter("live_gated").execute(
+            [
+                {
+                    "symbol": "A",
+                    "side": "BUY",
+                    "qty": 100,
+                    "reject": False,
+                    "mid_price": 10.0,
+                }
+            ],
+            AdapterContext(cost=cost, trade_date="2026-07-28", cash=10_000),
+        )
+        assert fills2 == []
+        assert live2[0]["reason"] == LIVE_SDK_NOT_CONFIGURED
+    finally:
+        os.environ.pop(LIVE_ENV_FLAG, None)
 
     cost_imp = CostSnapshot(
         version="t2",

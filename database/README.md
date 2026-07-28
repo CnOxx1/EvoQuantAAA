@@ -17,7 +17,7 @@
 cd backend
 python main.py migrate
 ```
-迁移脚本为 PostgreSQL 方言（`BIGSERIAL` 等），版本记录在 `schema_migrations`。当前迁移至 **`037_execution_adapters.sql`**（新文件从 `038` 起）。
+迁移脚本为 PostgreSQL 方言（`BIGSERIAL` 等），版本记录在 `schema_migrations`。当前迁移至 **`038_live_gated_adapter.sql`**（新文件从 `039` 起）。
 
 数据一致性速查（过账后）：
 - `sum(sleeve)`（account+symbol）应对齐 `ledger_balance` POSITION

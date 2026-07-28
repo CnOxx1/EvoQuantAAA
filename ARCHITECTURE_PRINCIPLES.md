@@ -42,7 +42,7 @@
 | backtest | `backend/backtest/` | A 股约束回测与报告 |
 | portfolio_construct | `backend/portfolio_construct/` | 组合构建 → 目标持仓（草稿） |
 | risk_engine | `backend/risk_engine/` | 事前/硬风控、Kill Switch；可否决执行 |
-| execution | `backend/execution/` | OMS：委托/成交事件（当前 paper；柜台适配器待接） |
+| execution | `backend/execution/` | OMS：委托/成交事件（`paper` / `broker_stub` / `live_gated`；真实 SDK 待接） |
 | ledger | `backend/ledger/` | 资金持仓过账；T+1 lot；**策略 sleeve 隔离持仓** |
 | ops_monitor | `backend/ops_monitor/` | 监控、对账、告警、受控重跑 |
 | e2e | `backend/e2e/` | 生产链路短窗回归（自备种子） |

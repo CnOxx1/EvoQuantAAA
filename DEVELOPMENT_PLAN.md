@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–20**（含证据冻结、执行适配器骨架）已落地（迁移 `001`–`037`）。  
-**下一优先**：真实券商 SDK 接入（须独立环境开关；本机禁止实盘下单）/ 长窗数据环境跑 OOS。  
+**当前进度**：阶段 **1–21**（含证据冻结、执行适配器、实盘闸门）已落地（迁移 `001`–`038`）。  
+**下一优先**：真实券商 SDK（须厂商选型 + `allow_fills` 显式打开；本机仍禁止实盘）/ 长窗数据环境跑 OOS。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `037`（execution adapters），**新迁移从 `038` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `038`（live_gated），**新迁移从 `039` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -73,9 +73,12 @@
 | console 写 | Kill / 晋升 / 风控审核经 gateway（无新迁移） |
 | OOS 证据冻结 | walk-forward + `research_evidence_freeze`（迁移 `036`） |
 | 执行适配器 | `paper` / `broker_stub`（迁移 `037`；stub 永不成交） |
+| 实盘闸门 | `live_gated` + `ASHARE_ALLOW_LIVE`（迁移 `038`；武装后仍无 SDK 则拒单） |
 | E2E + console | `python main.py e2e`；`frontend/console` |
 
-> **阶段 20（2026-07-28）**：执行适配器协议——`adapters/` + `broker_stub` dry-run 拒单；CLI `--adapter`；`execution_adapter_params`。禁止真实下单。下一优先：真实 SDK（独立开关）。
+> **阶段 21（2026-07-28）**：实盘环境闸门——`live_gated` + `ASHARE_ALLOW_LIVE`；服务层对 `require_live_env=1` fail-closed；永无真实下单/网络/密钥。下一优先：厂商 SDK（独立仓库开关 + allow_fills）。
+>
+> **阶段 20（2026-07-28）**：执行适配器协议——`adapters/` + `broker_stub` dry-run 拒单；CLI `--adapter`；`execution_adapter_params`。禁止真实下单。
 >
 > **阶段 19（2026-07-28）**：长窗 OOS 证据固化——`walk_forward` 切分 + 硬 OOS 门槛；冻结表 `research_evidence_freeze`（artifact_hash 幂等）。开发机仅短窗冒烟，长窗在有数据环境跑。
 >
@@ -518,6 +521,21 @@ CREATE TABLE IF NOT EXISTS research_run (
 
 **验收**：migrate `037`；适配器单测绿；paper 回归绿；文档同步。
 
+---
+
+## 阶段 21 · 实盘环境闸门（execution）
+
+### 任务 21.1 live_gated fail-closed
+
+**要求**：
+1. `live_gate.py`：`ASHARE_ALLOW_LIVE` 武装检测；`check_live_env_gate`
+2. `live_gated` 适配器：未武装 → `live_env_not_armed`；武装仍无 SDK → `live_sdk_not_configured`；**永不成交**
+3. 迁移 `038`：种子 `live_gated`（`require_live_env=1`，`allow_fills=0`）
+4. 服务层对 `require_live_env=1` 未武装直接 `invalid`；CLI 可选 `live_gated`；schedule 仍 paper
+5. pytest：闸门 / 武装 / 无 SDK 拒单
+
+**验收**：migrate `038`；适配器单测绿；全量 pytest；文档与 changelog 同步。
+
 ## 汇总清单
 
 | 阶段 | 任务 | 产出 |
@@ -557,3 +575,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | C | C.1 console 写 | Kill / 晋升 / review UI |
 | 19 | 19.1 OOS 冻结 | walk-forward + research_evidence_freeze |
 | 20 | 20.1 执行适配器 | paper / broker_stub 协议 + CLI |
+| 21 | 21.1 实盘闸门 | live_gated + ASHARE_ALLOW_LIVE fail-closed |

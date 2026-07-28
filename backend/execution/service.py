@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from execution.adapters import AdapterContext, get_adapter
+from execution.adapters.live_gate import check_live_env_gate
 from execution.models import ExecutionRequest, ExecutionResult
 from execution.paper import (
     build_paper_intents,
@@ -20,6 +21,36 @@ logger = logging.getLogger(__name__)
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _gate_blocks_live(gate: dict[str, Any] | None) -> str | None:
+    """require_live_env=1 且未武装时返回错误信息；否则 None。"""
+    if gate is None:
+        return None
+    ok, reason = check_live_env_gate(
+        require_live_env=int(gate.get("require_live_env") or 0) == 1
+    )
+    return None if ok else (reason or "live_env_not_armed")
+
+
+def _strip_fills_if_disallowed(
+    gate: dict[str, Any] | None,
+    orders_raw: list[dict[str, Any]],
+    fills_raw: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if gate is None or int(gate.get("allow_fills") or 0) == 1 or not fills_raw:
+        return orders_raw, fills_raw
+    orders = [
+        {
+            **o,
+            "status": "REJECTED",
+            "reason": o.get("reason") or "adapter_disallow_fills",
+        }
+        if str(o.get("status")) == "FILLED"
+        else o
+        for o in orders_raw
+    ]
+    return orders, []
 
 
 def _portfolio_meta(pf: dict[str, Any]) -> dict[str, Any]:
@@ -222,6 +253,15 @@ class ExecutionService:
                 portfolio_id=request.portfolio_id,
                 message=f"adapter={request.adapter} 未启用",
             )
+        live_block = _gate_blocks_live(gate)
+        if live_block:
+            return ExecutionResult(
+                status="invalid",
+                execution_id=execution_id,
+                portfolio_id=request.portfolio_id,
+                message=live_block,
+                meta={"adapter": request.adapter},
+            )
 
         try:
             cost = self.repo.load_cost(request.cost_version)
@@ -300,19 +340,9 @@ class ExecutionService:
                 meta={"portfolio_id": request.portfolio_id},
             ),
         )
-        # 安全网：allow_fills=0 的适配器不得留下成交
-        if gate is not None and int(gate.get("allow_fills") or 0) != 1 and fills_raw:
-            fills_raw = []
-            orders_raw = [
-                {
-                    **o,
-                    "status": "REJECTED",
-                    "reason": o.get("reason") or "adapter_disallow_fills",
-                }
-                if str(o.get("status")) == "FILLED"
-                else o
-                for o in orders_raw
-            ]
+        orders_raw, fills_raw = _strip_fills_if_disallowed(
+            gate, orders_raw, fills_raw
+        )
         residuals = compute_residuals(
             intents=intents,
             orders=orders_raw,
@@ -477,6 +507,26 @@ class ExecutionService:
                 )
             ]
 
+        gate = self.repo.load_adapter_params(adapter)
+        if gate is not None and int(gate.get("enabled") or 0) != 1:
+            return [
+                ExecutionResult(
+                    status="invalid",
+                    account_id=account_id,
+                    message=f"adapter={adapter} 未启用",
+                )
+            ]
+        live_block = _gate_blocks_live(gate)
+        if live_block:
+            return [
+                ExecutionResult(
+                    status="invalid",
+                    account_id=account_id,
+                    message=live_block,
+                    meta={"adapter": adapter},
+                )
+            ]
+
         try:
             cost = self.repo.load_cost(cost_version)
         except RuntimeError as exc:
@@ -574,18 +624,9 @@ class ExecutionService:
                 meta={"run_kind": "pending_resume"},
             ),
         )
-        if gate is not None and int(gate.get("allow_fills") or 0) != 1 and fills_raw:
-            fills_raw = []
-            orders_raw = [
-                {
-                    **o,
-                    "status": "REJECTED",
-                    "reason": o.get("reason") or "adapter_disallow_fills",
-                }
-                if str(o.get("status")) == "FILLED"
-                else o
-                for o in orders_raw
-            ]
+        orders_raw, fills_raw = _strip_fills_if_disallowed(
+            gate, orders_raw, fills_raw
+        )
         residuals = compute_residuals(
             intents=intents,
             orders=orders_raw,

@@ -3077,8 +3077,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ex_run.add_argument(
         "--adapter",
         default="paper",
-        choices=["paper", "broker_stub"],
-        help="paper=即时撮合；broker_stub=柜台骨架（一律拒单，无真实下单）",
+        choices=["paper", "broker_stub", "live_gated"],
+        help="paper=即时撮合；broker_stub/live_gated=拒单骨架（无真实下单）",
     )
     p_ex_run.add_argument(
         "--force",
@@ -3108,8 +3108,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ex_res.add_argument(
         "--adapter",
         default="paper",
-        choices=["paper", "broker_stub"],
-        help="默认 paper；schedule 勿改用 broker_stub",
+        choices=["paper", "broker_stub", "live_gated"],
+        help="默认 paper；schedule 勿改用 live 路径",
     )
     p_ex_res.add_argument("--job-id", default=None)
     p_ex_res.set_defaults(func=cmd_execution)
