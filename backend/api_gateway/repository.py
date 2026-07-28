@@ -188,6 +188,144 @@ class GatewayRepository:
             out.append(d)
         return out
 
+    def list_market_ranks(
+        self,
+        *,
+        trade_date: str | None = None,
+        rank_type: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT trade_date, rank_type, rank_no, symbol, name, metric_value,
+                   close, pct_chg, volume, amount, turnover, source
+            FROM raw_market_rank_1d WHERE 1=1
+        """
+        params: list[Any] = []
+        if trade_date:
+            sql += " AND trade_date=?"
+            params.append(trade_date[:10])
+        else:
+            sql += """
+                AND trade_date=(
+                    SELECT MAX(trade_date) FROM raw_market_rank_1d
+                )
+            """
+        if rank_type:
+            sql += " AND rank_type=?"
+            params.append(rank_type)
+        sql += " ORDER BY rank_type, rank_no ASC LIMIT ?"
+        params.append(max(1, min(limit, 500)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_rank_meta(self) -> dict[str, Any]:
+        with get_conn() as conn:
+            dates = [
+                str(r["d"])
+                for r in conn.execute(
+                    """
+                    SELECT DISTINCT trade_date AS d FROM raw_market_rank_1d
+                    ORDER BY trade_date DESC LIMIT 30
+                    """
+                ).fetchall()
+            ]
+            types = [
+                str(r["rank_type"])
+                for r in conn.execute(
+                    """
+                    SELECT DISTINCT rank_type FROM raw_market_rank_1d
+                    ORDER BY rank_type
+                    """
+                ).fetchall()
+            ]
+        return {"trade_dates": dates, "rank_types": types}
+
+    def list_abnormal_moves(
+        self,
+        *,
+        trade_date: str | None = None,
+        change_type: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT trade_date, event_time, symbol, name, change_type,
+                   related_info, source_event_id, source
+            FROM raw_abnormal_move WHERE 1=1
+        """
+        params: list[Any] = []
+        if trade_date:
+            sql += " AND trade_date=?"
+            params.append(trade_date[:10])
+        else:
+            sql += """
+                AND trade_date=(
+                    SELECT MAX(trade_date) FROM raw_abnormal_move
+                )
+            """
+        if change_type:
+            sql += " AND change_type=?"
+            params.append(change_type)
+        sql += " ORDER BY event_time DESC NULLS LAST, symbol LIMIT ?"
+        params.append(max(1, min(limit, 500)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_news(
+        self,
+        *,
+        channel: str | None = None,
+        symbol: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT source_news_id, symbol, title, summary, publish_time, url,
+                   media_source, channel, source, content_type, extra_json
+            FROM raw_news_media WHERE 1=1
+        """
+        params: list[Any] = []
+        if channel:
+            sql += " AND channel=?"
+            params.append(channel)
+        if symbol:
+            sql += " AND symbol=?"
+            params.append(symbol)
+        sql += " ORDER BY publish_time DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        for r in rows:
+            try:
+                r["extra"] = json.loads(str(r.pop("extra_json", None) or "{}"))
+            except json.JSONDecodeError:
+                r["extra"] = {}
+        return rows
+
+    def list_dragon_tiger(
+        self,
+        *,
+        trade_date: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT symbol, trade_date, reason, close, pct_chg, net_amount,
+                   buy_amount, sell_amount, source_event_id, source
+            FROM raw_dragon_tiger WHERE 1=1
+        """
+        params: list[Any] = []
+        if trade_date:
+            sql += " AND trade_date=?"
+            params.append(trade_date[:10])
+        else:
+            sql += """
+                AND trade_date=(
+                    SELECT MAX(trade_date) FROM raw_dragon_tiger
+                )
+            """
+        sql += " ORDER BY ABS(COALESCE(net_amount,0)) DESC, symbol LIMIT ?"
+        params.append(max(1, min(limit, 300)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
     def get_ledger_account(self, account_id: str) -> dict[str, Any] | None:
         with get_conn() as conn:
             acct = conn.execute(

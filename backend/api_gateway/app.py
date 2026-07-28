@@ -187,6 +187,57 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         return _emit(svc.list_research_runs(limit=limit))
 
+    @app.get("/v1/market/ranks/meta")
+    def market_ranks_meta(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.market_rank_meta())
+
+    @app.get("/v1/market/ranks")
+    def market_ranks(
+        trade_date: str | None = None,
+        rank_type: str | None = None,
+        limit: int = Query(100, ge=1, le=500),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_market_ranks(
+                trade_date=trade_date, rank_type=rank_type, limit=limit
+            )
+        )
+
+    @app.get("/v1/market/abnormal")
+    def market_abnormal(
+        trade_date: str | None = None,
+        change_type: str | None = None,
+        limit: int = Query(100, ge=1, le=500),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_abnormal_moves(
+                trade_date=trade_date, change_type=change_type, limit=limit
+            )
+        )
+
+    @app.get("/v1/market/news")
+    def market_news(
+        channel: str | None = None,
+        symbol: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_news(channel=channel, symbol=symbol, limit=limit)
+        )
+
+    @app.get("/v1/market/dragon-tiger")
+    def market_dragon_tiger(
+        trade_date: str | None = None,
+        limit: int = Query(100, ge=1, le=300),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_dragon_tiger(trade_date=trade_date, limit=limit)
+        )
+
     @app.get("/v1/ledger/accounts/{account_id}")
     def get_ledger(
         account_id: str,

@@ -244,6 +244,53 @@ class GatewayService:
     def list_research_runs(self, *, limit: int = 50) -> dict:
         return ok(self.repo.list_research_runs(limit=limit))
 
+    def list_market_ranks(
+        self,
+        *,
+        trade_date: str | None = None,
+        rank_type: str | None = None,
+        limit: int = 100,
+    ) -> dict:
+        return ok(
+            self.repo.list_market_ranks(
+                trade_date=trade_date, rank_type=rank_type, limit=limit
+            )
+        )
+
+    def market_rank_meta(self) -> dict:
+        return ok(self.repo.list_rank_meta())
+
+    def list_abnormal_moves(
+        self,
+        *,
+        trade_date: str | None = None,
+        change_type: str | None = None,
+        limit: int = 100,
+    ) -> dict:
+        return ok(
+            self.repo.list_abnormal_moves(
+                trade_date=trade_date, change_type=change_type, limit=limit
+            )
+        )
+
+    def list_news(
+        self,
+        *,
+        channel: str | None = None,
+        symbol: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        return ok(
+            self.repo.list_news(channel=channel, symbol=symbol, limit=limit)
+        )
+
+    def list_dragon_tiger(
+        self, *, trade_date: str | None = None, limit: int = 100
+    ) -> dict:
+        return ok(
+            self.repo.list_dragon_tiger(trade_date=trade_date, limit=limit)
+        )
+
     def get_ledger(self, account_id: str, *, as_of: str | None = None) -> dict:
         row = self.repo.get_ledger_account(account_id)
         if not row:

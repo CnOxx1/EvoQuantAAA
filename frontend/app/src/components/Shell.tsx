@@ -6,6 +6,7 @@ import styles from "./Shell.module.css";
 
 const NAV = [
   { to: "/", label: "总览", end: true },
+  { to: "/market", label: "市场情报" },
   { to: "/strategies", label: "策略" },
   { to: "/portfolio", label: "组合" },
   { to: "/risk", label: "风控" },

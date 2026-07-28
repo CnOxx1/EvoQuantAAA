@@ -213,3 +213,94 @@ export async function listResearchRuns(cfg: ClientConfig, limit = 50) {
     await apiRequest(cfg, "GET", `/v1/research/runs?limit=${limit}`),
   );
 }
+
+export type MarketRankRow = Record<string, unknown> & {
+  trade_date?: string;
+  rank_type?: string;
+  rank_no?: number;
+  symbol?: string;
+  name?: string;
+  pct_chg?: number;
+};
+
+export type AbnormalRow = Record<string, unknown> & {
+  trade_date?: string;
+  symbol?: string;
+  change_type?: string;
+  event_time?: string;
+};
+
+export type NewsRow = Record<string, unknown> & {
+  title?: string;
+  publish_time?: string;
+  channel?: string;
+  symbol?: string;
+  url?: string;
+};
+
+export type DragonTigerRow = Record<string, unknown> & {
+  symbol?: string;
+  trade_date?: string;
+  reason?: string;
+  net_amount?: number;
+};
+
+export async function getMarketRankMeta(cfg: ClientConfig) {
+  return (unwrapData(
+    await apiRequest(cfg, "GET", "/v1/market/ranks/meta"),
+  ) || { trade_dates: [], rank_types: [] }) as {
+    trade_dates: string[];
+    rank_types: string[];
+  };
+}
+
+export async function listMarketRanks(
+  cfg: ClientConfig,
+  opts?: { tradeDate?: string; rankType?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  q.set("limit", String(opts?.limit ?? 100));
+  if (opts?.tradeDate) q.set("trade_date", opts.tradeDate);
+  if (opts?.rankType) q.set("rank_type", opts.rankType);
+  return asList<MarketRankRow>(
+    await apiRequest(cfg, "GET", `/v1/market/ranks?${q}`),
+  );
+}
+
+export async function listAbnormalMoves(
+  cfg: ClientConfig,
+  opts?: { tradeDate?: string; changeType?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  q.set("limit", String(opts?.limit ?? 100));
+  if (opts?.tradeDate) q.set("trade_date", opts.tradeDate);
+  if (opts?.changeType) q.set("change_type", opts.changeType);
+  return asList<AbnormalRow>(
+    await apiRequest(cfg, "GET", `/v1/market/abnormal?${q}`),
+  );
+}
+
+export async function listNews(
+  cfg: ClientConfig,
+  opts?: { channel?: string; symbol?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  q.set("limit", String(opts?.limit ?? 50));
+  if (opts?.channel) q.set("channel", opts.channel);
+  if (opts?.symbol) q.set("symbol", opts.symbol);
+  return asList<NewsRow>(
+    await apiRequest(cfg, "GET", `/v1/market/news?${q}`),
+  );
+}
+
+export async function listDragonTiger(
+  cfg: ClientConfig,
+  opts?: { tradeDate?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  q.set("limit", String(opts?.limit ?? 100));
+  if (opts?.tradeDate) q.set("trade_date", opts.tradeDate);
+  return asList<DragonTigerRow>(
+    await apiRequest(cfg, "GET", `/v1/market/dragon-tiger?${q}`),
+  );
+}

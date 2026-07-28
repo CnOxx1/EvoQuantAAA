@@ -38,6 +38,7 @@ npm run preview
 | 路由 | 中文 | 数据来源 |
 | --- | --- | --- |
 | `/` | 总览 | 策略/组合/告警/执行/残差/账本拼装 |
+| `/market` | 市场情报 | 榜单/异动/新闻/龙虎榜 |
 | `/strategies` | 策略 | `/v1/strategies` + 晋升 |
 | `/portfolio` | 组合 | `/v1/portfolios` + 审核 |
 | `/risk` | 风控 | Kill + decisions |

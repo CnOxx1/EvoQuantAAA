@@ -56,6 +56,11 @@
 | GET | `/v1/executions/{id}` | 执行+委托+成交 |
 | GET | `/v1/execution/pending` | 残差列表 `?account_id=&status=open` |
 | GET | `/v1/research/runs` | 研究运行列表 |
+| GET | `/v1/market/ranks/meta` | 榜单可用日期与类型 |
+| GET | `/v1/market/ranks` | 市场榜单 `?trade_date=&rank_type=` |
+| GET | `/v1/market/abnormal` | 盘口异动 |
+| GET | `/v1/market/news` | 新闻/舆情 `?channel=&symbol=` |
+| GET | `/v1/market/dragon-tiger` | 龙虎榜 |
 | GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 |
 | GET | `/v1/ops/alerts` | 告警 |
 

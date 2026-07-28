@@ -12,6 +12,7 @@ import { LedgerPage } from "./pages/LedgerPage";
 import { OpsPage } from "./pages/OpsPage";
 import { TradePage } from "./pages/TradePage";
 import { ResearchPage } from "./pages/ResearchPage";
+import { MarketPage } from "./pages/MarketPage";
 import { loadSettings, type Settings } from "./state/settings";
 
 export default function App() {
@@ -82,6 +83,12 @@ export default function App() {
         <Route
           path="research"
           element={<ResearchPage cfg={cfg} connected={connected} />}
+        />
+        <Route
+          path="market"
+          element={
+            <MarketPage cfg={cfg} settings={settings} connected={connected} />
+          }
         />
         <Route
           path="trade"
