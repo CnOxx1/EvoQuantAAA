@@ -14,36 +14,40 @@ export function SettingsPage({
   onChange: (next: Settings) => void;
 }) {
   const [draft, setDraft] = useState(settings);
+  const [saved, setSaved] = useState(false);
 
   function submit(e: FormEvent) {
     e.preventDefault();
     saveSettings(draft);
     onChange(draft);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1500);
   }
 
   return (
     <div>
-      <h1>Settings</h1>
+      <h1>设置</h1>
       <p className="lede">
-        API Base / Token / 默认账户 / 环境徽章。设置仅存本机
-        localStorage，不进库。
+        连接参数仅保存在本机浏览器，不会写入业务库。若本机 8080
+        被代理占用，请改为网关实际端口（例如 8088）。
       </p>
       <form className={`${styles.form} ${styles.panel}`} onSubmit={submit}>
         <label>
-          API Base
+          网关地址（API Base）
           <input
             value={draft.apiBase}
             onChange={(e) => setDraft({ ...draft, apiBase: e.target.value })}
             required
+            placeholder="http://127.0.0.1:8088"
           />
         </label>
         <label>
-          Bearer Token
+          访问令牌（Bearer Token）
           <input
             type="password"
             value={draft.apiToken}
             onChange={(e) => setDraft({ ...draft, apiToken: e.target.value })}
-            placeholder="ASHARE_API_TOKEN"
+            placeholder="未设置 ASHARE_API_TOKEN 时可留空"
             autoComplete="off"
           />
         </label>
@@ -56,7 +60,7 @@ export function SettingsPage({
           />
         </label>
         <label>
-          as-of
+          业务日（as-of）
           <input
             type="date"
             value={draft.asOf}
@@ -74,9 +78,9 @@ export function SettingsPage({
               })
             }
           >
-            <option value="research">research</option>
-            <option value="paper">paper</option>
-            <option value="live">live（UI 锁死提示）</option>
+            <option value="research">研究</option>
+            <option value="paper">纸面</option>
+            <option value="live">实盘（界面锁定提示）</option>
           </select>
         </label>
         <div className={styles.btnRow}>
@@ -94,6 +98,7 @@ export function SettingsPage({
           >
             恢复默认
           </button>
+          {saved ? <span className={styles.muted}>已保存</span> : null}
         </div>
       </form>
     </div>

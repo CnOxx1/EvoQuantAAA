@@ -33,16 +33,19 @@ npm run build
 npm run preview
 ```
 
-## F1 范围
+## F1–F2 范围（当前）
 
-| 路由 | 状态 |
-| --- | --- |
-| `/` Overview | 管道灯带（拼装现有 API） |
-| `/strategies` | 状态机 + 晋升 |
-| `/portfolio` | 列表 / 持仓 / 风控审核 |
-| `/risk` | Kill + decisions |
-| `/settings` | API base / token / env |
-| Research / Trade / Ledger / Ops | F2 占位 |
+| 路由 | 中文 | 数据来源 |
+| --- | --- | --- |
+| `/` | 总览 | 策略/组合/告警/执行/残差/账本拼装 |
+| `/strategies` | 策略 | `/v1/strategies` + 晋升 |
+| `/portfolio` | 组合 | `/v1/portfolios` + 审核 |
+| `/risk` | 风控 | Kill + decisions |
+| `/research` | 研究 | `/v1/research/runs` |
+| `/trade` | 交易 | `/v1/executions` + pending + 成交明细 |
+| `/ledger` | 账本 | `/v1/ledger/accounts/{id}` |
+| `/ops` | 运维 | `/v1/ops/alerts` |
+| `/settings` | 设置 | 本机 localStorage |
 
 ## 设计
 

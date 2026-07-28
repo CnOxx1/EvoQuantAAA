@@ -148,3 +148,68 @@ export async function getLedger(
     await apiRequest(cfg, "GET", `/v1/ledger/accounts/${accountId}${q}`),
   ) || {}) as LedgerSnapshot;
 }
+
+export type ExecutionRow = Record<string, unknown> & {
+  execution_id?: string;
+  portfolio_id?: string;
+  account_id?: string;
+  status?: string;
+  adapter?: string;
+  as_of_date?: string;
+  order_count?: number;
+  fill_count?: number;
+};
+
+export type PendingRow = Record<string, unknown> & {
+  pending_id?: string;
+  symbol?: string;
+  side?: string;
+  qty_remaining?: number;
+  status?: string;
+};
+
+export type ResearchRunRow = Record<string, unknown> & {
+  run_id?: string;
+  factor_code?: string;
+  universe_code?: string;
+  status?: string;
+  start_date?: string;
+  end_date?: string;
+};
+
+export async function listExecutions(
+  cfg: ClientConfig,
+  opts?: { accountId?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  q.set("limit", String(opts?.limit ?? 50));
+  if (opts?.accountId) q.set("account_id", opts.accountId);
+  return asList<ExecutionRow>(
+    await apiRequest(cfg, "GET", `/v1/executions?${q}`),
+  );
+}
+
+export async function getExecution(cfg: ClientConfig, executionId: string) {
+  return (unwrapData(
+    await apiRequest(cfg, "GET", `/v1/executions/${executionId}`),
+  ) || {}) as Record<string, unknown>;
+}
+
+export async function listPending(
+  cfg: ClientConfig,
+  opts?: { accountId?: string; status?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  q.set("limit", String(opts?.limit ?? 100));
+  if (opts?.accountId) q.set("account_id", opts.accountId);
+  if (opts?.status) q.set("status", opts.status);
+  return asList<PendingRow>(
+    await apiRequest(cfg, "GET", `/v1/execution/pending?${q}`),
+  );
+}
+
+export async function listResearchRuns(cfg: ClientConfig, limit = 50) {
+  return asList<ResearchRunRow>(
+    await apiRequest(cfg, "GET", `/v1/research/runs?limit=${limit}`),
+  );
+}

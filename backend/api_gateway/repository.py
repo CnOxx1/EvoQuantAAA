@@ -118,9 +118,75 @@ class GatewayRepository:
                 """,
                 (execution_id,),
             ).fetchall()
+            orders = conn.execute(
+                """
+                SELECT event_id, order_id, symbol, side, qty, limit_price, status,
+                       event_type, reason, created_at
+                FROM order_event WHERE execution_id=?
+                ORDER BY created_at, symbol
+                """,
+                (execution_id,),
+            ).fetchall()
         d = dict(run)
         d["fills"] = [dict(f) for f in fills]
+        d["orders"] = [dict(o) for o in orders]
         return d
+
+    def list_executions(
+        self,
+        *,
+        account_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM execution_run WHERE 1=1"
+        params: list[Any] = []
+        if account_id:
+            sql += " AND account_id=?"
+            params.append(account_id)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_pending(
+        self,
+        *,
+        account_id: str | None = None,
+        status: str | None = "open",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM execution_pending WHERE 1=1"
+        params: list[Any] = []
+        if account_id:
+            sql += " AND account_id=?"
+            params.append(account_id)
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_research_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM research_run
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 200)),),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(str(d.get("meta_json") or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+            out.append(d)
+        return out
 
     def get_ledger_account(self, account_id: str) -> dict[str, Any] | None:
         with get_conn() as conn:

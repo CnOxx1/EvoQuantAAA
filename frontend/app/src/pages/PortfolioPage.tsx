@@ -10,6 +10,7 @@ import {
 import { ApiError } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { StatusPill, toneFromStatus } from "../components/StatusPill";
+import { n, s, statusZh } from "../lib/format";
 import type { Settings } from "../state/settings";
 import styles from "./pages.module.css";
 
@@ -29,11 +30,10 @@ export function PortfolioPage({
   const [resultBox, setResultBox] = useState("");
 
   const listQ = useQuery({
-    queryKey: ["portfolios", cfg.apiBase, statusFilter, settings.asOf],
+    queryKey: ["portfolios", cfg.apiBase, statusFilter],
     queryFn: () =>
       listPortfolios(cfg, {
         status: statusFilter || undefined,
-        asOf: settings.asOf,
         limit: 50,
       }),
     enabled: connected,
@@ -43,7 +43,7 @@ export function PortfolioPage({
     mutationFn: async (mode: "one" | "drafts") => {
       if (mode === "one") {
         const id = String(selected?.portfolio_id || "");
-        if (!id) throw new Error("请先选择 portfolio");
+        if (!id) throw new Error("请先选择组合");
         return reviewRisk(cfg, { portfolio_id: id });
       }
       return reviewRisk(cfg, { drafts: true, as_of: settings.asOf });
@@ -80,54 +80,54 @@ export function PortfolioPage({
 
   const positions = Array.isArray(detail?.positions)
     ? (detail?.positions as Record<string, unknown>[])
-    : Array.isArray(detail?.items)
-      ? (detail?.items as Record<string, unknown>[])
-      : [];
+    : [];
 
   return (
     <div>
-      <h1>目标持仓</h1>
+      <h1>目标组合</h1>
       <p className="lede">
-        draft → 风控审核。成交执行仍走 schedule/CLI（F3 前 UI 不下单）。
+        数据来自 <code className="mono">/v1/portfolios</code>
+        。可提交风控审核；成交执行仍由 CLI/日更完成。
       </p>
 
       <div className={styles.toolbar}>
         <label>
-          状态
+          状态筛选
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
           >
             <option value="">全部</option>
-            <option value="draft">draft</option>
-            <option value="approved">approved</option>
-            <option value="executed">executed</option>
+            <option value="draft">草稿</option>
+            <option value="approved">已放行</option>
+            <option value="executed">已执行</option>
           </select>
         </label>
         <button
           type="button"
           className={styles.primary}
-          disabled={mut.isPending || !selected}
+          disabled={mut.isPending || !selected || !connected}
           onClick={() => mut.mutate("one")}
         >
-          审核所选
+          审核所选组合
         </button>
         <button
           type="button"
           className={styles.secondary}
-          disabled={mut.isPending}
+          disabled={mut.isPending || !connected}
           onClick={() => mut.mutate("drafts")}
         >
-          批量审核 draft（as-of）
+          批量审核当日草稿
         </button>
       </div>
 
       <div className={styles.grid2}>
         <section className={styles.panel}>
-          <h2>组合</h2>
+          <h2>组合列表（{listQ.data?.length ?? 0}）</h2>
           <DataTable
-            headers={["portfolio", "status", "strategy", "as_of"]}
+            headers={["组合 ID", "状态", "策略", "业务日", "NAV", "账户"]}
             empty="无组合"
+            isEmpty={(listQ.data ?? []).length === 0}
           >
             {(listQ.data ?? []).map((row) => {
               const id = String(row.portfolio_id ?? "—");
@@ -144,15 +144,17 @@ export function PortfolioPage({
                   </td>
                   <td>
                     <StatusPill tone={toneFromStatus(String(row.status))}>
-                      {String(row.status ?? "—")}
+                      {statusZh(String(row.status))}
                     </StatusPill>
                   </td>
                   <td className="mono">
-                    {String(row.strategy_version ?? "—")}
+                    {s(row.strategy_version).slice(0, 18)}
                   </td>
                   <td className="mono">
-                    {String(row.as_of_date ?? row.as_of ?? "—")}
+                    {s(row.as_of_date ?? row.as_of)}
                   </td>
+                  <td>{n(row.nav)}</td>
+                  <td className="mono">{s(row.account_id)}</td>
                 </tr>
               );
             })}
@@ -160,18 +162,19 @@ export function PortfolioPage({
         </section>
 
         <section className={styles.panel}>
-          <h2>持仓明细</h2>
+          <h2>目标持仓明细</h2>
           <DataTable
-            headers={["symbol", "target", "price", "can_buy", "can_sell"]}
-            empty="选择组合查看"
+            headers={["代码", "目标股数", "权重", "价格", "市值"]}
+            empty="选择左侧组合查看"
+            isEmpty={positions.length === 0}
           >
             {positions.map((p, i) => (
-              <tr key={`${String(p.symbol)}-${i}`}>
-                <td className="mono">{String(p.symbol ?? "—")}</td>
-                <td>{String(p.target_shares ?? p.shares ?? "—")}</td>
-                <td>{String(p.price ?? "—")}</td>
-                <td>{String(p.can_buy ?? "—")}</td>
-                <td>{String(p.can_sell ?? "—")}</td>
+              <tr key={`${s(p.symbol)}-${i}`}>
+                <td className="mono">{s(p.symbol)}</td>
+                <td>{n(p.target_shares, 0)}</td>
+                <td>{n(p.target_weight, 4)}</td>
+                <td>{n(p.price)}</td>
+                <td>{n(p.target_value)}</td>
               </tr>
             ))}
           </DataTable>

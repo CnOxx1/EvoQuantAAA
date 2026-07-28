@@ -9,9 +9,17 @@ import {
 import { ApiError } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { StatusPill, toneFromStatus } from "../components/StatusPill";
+import { parseJsonField, s, statusZh } from "../lib/format";
 import styles from "./pages.module.css";
 
 const LANES = ["DRAFT", "BACKTESTED", "PAPER", "LIVE", "RETIRED"] as const;
+const LANE_ZH: Record<string, string> = {
+  DRAFT: "草稿",
+  BACKTESTED: "已回测",
+  PAPER: "纸面",
+  LIVE: "生产",
+  RETIRED: "退役",
+};
 
 export function StrategiesPage({
   cfg,
@@ -35,7 +43,7 @@ export function StrategiesPage({
 
   const byStatus = useMemo(() => {
     const map: Record<string, StrategyRow[]> = {};
-    for (const s of LANES) map[s] = [];
+    for (const lane of LANES) map[lane] = [];
     for (const row of q.data ?? []) {
       const st = String(row.status || "DRAFT").toUpperCase();
       (map[st] ??= []).push(row);
@@ -48,7 +56,7 @@ export function StrategiesPage({
       const version = String(
         selected?.strategy_version || selected?.version || "",
       );
-      if (!version) throw new Error("未选择 strategy_version");
+      if (!version) throw new Error("未选择策略版本");
       if (skipGates && !reason.trim()) {
         throw new Error("跳过质量门必须填写原因");
       }
@@ -64,11 +72,11 @@ export function StrategiesPage({
       void qc.invalidateQueries({ queryKey: ["strategies"] });
     },
     onError: (err) => {
-      if (err instanceof ApiError) {
-        setResultBox(JSON.stringify(err.body, null, 2));
-      } else {
-        setResultBox(String(err));
-      }
+      setResultBox(
+        err instanceof ApiError
+          ? JSON.stringify(err.body, null, 2)
+          : String(err),
+      );
     },
   });
 
@@ -77,17 +85,22 @@ export function StrategiesPage({
     mut.mutate();
   }
 
+  const params = parseJsonField(selected?.params);
+
   return (
     <div>
       <h1>策略版本</h1>
       <p className="lede">
-        状态机 + 晋升抽屉。LIVE 为生产信号源，不直接下单。跳过质量门须原因。
+        数据来自 <code className="mono">/v1/strategies</code>
+        。LIVE 表示可出生产信号，不代表本台可下单。
       </p>
 
       <div className={styles.lanes}>
         {LANES.map((lane) => (
           <div key={lane} className={styles.lane}>
-            <div className={styles.laneTitle}>{lane}</div>
+            <div className={styles.laneTitle}>
+              {LANE_ZH[lane]} ({lane})
+            </div>
             <div className={styles.laneBody}>
               {(byStatus[lane] ?? []).map((row) => {
                 const id = String(row.strategy_version ?? "—");
@@ -98,10 +111,14 @@ export function StrategiesPage({
                     className={styles.chip}
                     onClick={() => {
                       setSelected(row);
+                      setBacktestRun(String(row.backtest_run_id ?? ""));
                       setResultBox("");
                     }}
                   >
-                    <code className="mono">{id.slice(0, 14)}</code>
+                    <code className="mono">{id.slice(0, 16)}</code>
+                    <div className={styles.muted}>
+                      {s(row.strategy_code ?? row.strategy_kind)}
+                    </div>
                   </button>
                 );
               })}
@@ -115,10 +132,11 @@ export function StrategiesPage({
 
       <div className={styles.grid2}>
         <section className={styles.panel}>
-          <h2>列表</h2>
+          <h2>策略列表（{q.data?.length ?? 0}）</h2>
           <DataTable
-            headers={["version", "status", "strategy_id"]}
+            headers={["版本", "代码", "类型", "状态", "更新时间"]}
             empty="无策略"
+            isEmpty={(q.data ?? []).length === 0}
           >
             {(q.data ?? []).map((row) => {
               const id = String(row.strategy_version ?? "—");
@@ -133,23 +151,40 @@ export function StrategiesPage({
                       <code className="mono">{id}</code>
                     </button>
                   </td>
+                  <td>{s(row.strategy_code)}</td>
+                  <td className="mono">{s(row.strategy_kind)}</td>
                   <td>
                     <StatusPill tone={toneFromStatus(String(row.status))}>
-                      {String(row.status ?? "—")}
+                      {statusZh(String(row.status))}
                     </StatusPill>
                   </td>
-                  <td className="mono">{String(row.strategy_id ?? "—")}</td>
+                  <td className="mono">{s(row.updated_at)}</td>
                 </tr>
               );
             })}
           </DataTable>
+          {selected ? (
+            <pre className={styles.result} style={{ marginTop: "0.75rem" }}>
+              {JSON.stringify(
+                {
+                  strategy_version: selected.strategy_version,
+                  note: selected.note,
+                  research_run_id: selected.research_run_id,
+                  backtest_run_id: selected.backtest_run_id,
+                  params,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          ) : null}
         </section>
 
         <section className={styles.panel}>
-          <h2>晋升</h2>
+          <h2>晋升操作</h2>
           <form className={styles.form} onSubmit={onSubmit}>
             <label>
-              strategy_version
+              策略版本
               <input
                 className="mono"
                 value={String(
@@ -170,13 +205,13 @@ export function StrategiesPage({
               <select value={to} onChange={(e) => setTo(e.target.value)}>
                 {LANES.map((x) => (
                   <option key={x} value={x}>
-                    {x}
+                    {LANE_ZH[x]} ({x})
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              backtest_run（可选）
+              关联回测（可选）
               <input
                 className="mono"
                 value={backtestRun}
@@ -198,9 +233,13 @@ export function StrategiesPage({
                 checked={skipGates}
                 onChange={(e) => setSkipGates(e.target.checked)}
               />
-              跳过质量门（须原因）
+              跳过质量门（必须填写原因）
             </label>
-            <button type="submit" className={styles.primary} disabled={mut.isPending}>
+            <button
+              type="submit"
+              className={styles.primary}
+              disabled={mut.isPending || !connected}
+            >
               {mut.isPending ? "提交中…" : "提交晋升"}
             </button>
           </form>

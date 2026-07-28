@@ -6,12 +6,15 @@ import {
   getLedger,
   isKillOn,
   listAlerts,
+  listExecutions,
+  listPending,
   listPortfolios,
   listStrategies,
   type ClientConfig,
 } from "../api/gateway";
 import { DataTable } from "../components/DataTable";
 import { StatusPill, type PillTone } from "../components/StatusPill";
+import { n, s, statusZh } from "../lib/format";
 import type { Settings } from "../state/settings";
 import styles from "./pages.module.css";
 
@@ -24,74 +27,71 @@ function buildPipeline(input: {
   approved: number;
   killOn: boolean;
   alerts: number;
-  hasLedger: boolean;
+  executions: number;
+  pending: number;
+  cash: number | null;
   connected: boolean;
 }): Stage[] {
   if (!input.connected) {
-    return [
-      "ingest",
-      "process",
-      "DQ",
-      "signal",
-      "portfolio",
-      "risk",
-      "exec",
-      "ledger",
-    ].map((id) => ({
-      id,
-      label: id,
-      tone: "skipped" as const,
-      detail: "API 未连接",
-    }));
+    return ["取数", "加工", "质检", "信号", "组合", "风控", "执行", "账本"].map(
+      (label, i) => ({
+        id: String(i),
+        label,
+        tone: "skipped" as const,
+        detail: "请先连接网关",
+      }),
+    );
   }
   return [
     {
       id: "ingest",
-      label: "ingest",
+      label: "取数",
       tone: "ok",
-      detail: "经 schedule/CLI；本页不触发 bulk",
+      detail: "由日更/CLI 负责",
     },
     {
       id: "process",
-      label: "process",
+      label: "加工",
       tone: "ok",
-      detail: "加工链路默认假定已跑",
+      detail: "复权与可买卖掩码",
     },
     {
       id: "dq",
-      label: "DQ",
+      label: "质检",
       tone: input.alerts > 0 ? "degraded" : "ok",
-      detail: input.alerts > 0 ? `${input.alerts} 条近期告警` : "无近期告警",
+      detail:
+        input.alerts > 0 ? `近 ${input.alerts} 条告警` : "近期无告警",
     },
     {
       id: "signal",
-      label: "signal",
+      label: "信号",
       tone: input.strategies > 0 ? "ok" : "degraded",
       detail: `${input.strategies} 个策略版本`,
     },
     {
       id: "portfolio",
-      label: "portfolio",
+      label: "组合",
       tone: input.portfolios > 0 ? "ok" : "degraded",
-      detail: `${input.drafts} draft / ${input.approved} approved`,
+      detail: `草稿 ${input.drafts} / 已放行 ${input.approved}`,
     },
     {
       id: "risk",
-      label: "risk",
+      label: "风控",
       tone: input.killOn ? "failed" : "ok",
-      detail: input.killOn ? "Kill ON" : "Kill OFF",
+      detail: input.killOn ? "熔断已开启" : "熔断关闭",
     },
     {
       id: "exec",
-      label: "exec",
-      tone: "info",
-      detail: "执行只读；F3 前不在 UI 下单",
+      label: "执行",
+      tone: input.executions > 0 ? "ok" : "info",
+      detail: `${input.executions} 次执行 · 残差 ${input.pending}`,
     },
     {
       id: "ledger",
-      label: "ledger",
-      tone: input.hasLedger ? "ok" : "degraded",
-      detail: input.hasLedger ? "账户可读" : "账本未就绪",
+      label: "账本",
+      tone: input.cash !== null ? "ok" : "degraded",
+      detail:
+        input.cash !== null ? `现金 ${n(input.cash, 2)}` : "账本未就绪",
     },
   ];
 }
@@ -126,13 +126,29 @@ export function OverviewPage({
     queryFn: () => listPortfolios(cfg, { limit: 50 }),
     enabled: connected,
   });
+  const exQ = useQuery({
+    queryKey: ["executions", cfg.apiBase, settings.accountId],
+    queryFn: () =>
+      listExecutions(cfg, { accountId: settings.accountId, limit: 20 }),
+    enabled: connected,
+  });
+  const pendQ = useQuery({
+    queryKey: ["pending", cfg.apiBase, settings.accountId],
+    queryFn: () =>
+      listPending(cfg, { accountId: settings.accountId, status: "open" }),
+    enabled: connected,
+  });
   const ledgerQ = useQuery({
-    queryKey: ["ledger", cfg.apiBase, settings.accountId],
+    queryKey: ["ledger", cfg.apiBase, settings.accountId, settings.asOf],
     queryFn: () => getLedger(cfg, settings.accountId, settings.asOf),
     enabled: connected,
   });
 
   const portfolios = pfQ.data ?? [];
+  const cash =
+    ledgerQ.data && !ledgerQ.isError
+      ? Number(ledgerQ.data.cash ?? NaN)
+      : null;
   const stages = useMemo(
     () =>
       buildPipeline({
@@ -143,7 +159,9 @@ export function OverviewPage({
         approved: portfolios.filter((p) => p.status === "approved").length,
         killOn: isKillOn(killQ.data),
         alerts: alertsQ.data?.length ?? 0,
-        hasLedger: Boolean(ledgerQ.data && !ledgerQ.isError),
+        executions: exQ.data?.length ?? 0,
+        pending: pendQ.data?.length ?? 0,
+        cash: Number.isFinite(cash as number) ? (cash as number) : null,
       }),
     [
       connected,
@@ -151,8 +169,9 @@ export function OverviewPage({
       portfolios,
       killQ.data,
       alertsQ.data,
-      ledgerQ.data,
-      ledgerQ.isError,
+      exQ.data,
+      pendQ.data,
+      cash,
     ],
   );
 
@@ -160,17 +179,18 @@ export function OverviewPage({
     <div>
       <h1>今日管道</h1>
       <p className="lede">
-        as-of {settings.asOf} · 灯带由现有 gateway 接口拼装（F1）；不触发长窗
-        bulk。
+        业务日 {settings.asOf} · 账户{" "}
+        <code className="mono">{settings.accountId}</code> ·
+        以下数据均来自网关已落库结果
       </p>
 
       <div className={styles.pipeline}>
-        {stages.map((s, i) => (
-          <div key={s.id} className={styles.stage}>
+        {stages.map((sRow, i) => (
+          <div key={sRow.id} className={styles.stage}>
             {i > 0 ? <span className={styles.connector} aria-hidden /> : null}
             <div className={styles.stageBody}>
-              <StatusPill tone={s.tone}>{s.label}</StatusPill>
-              <span className={styles.stageDetail}>{s.detail}</span>
+              <StatusPill tone={sRow.tone}>{sRow.label}</StatusPill>
+              <span className={styles.stageDetail}>{sRow.detail}</span>
             </div>
           </div>
         ))}
@@ -180,11 +200,15 @@ export function OverviewPage({
         <section className={styles.panel}>
           <div className={styles.panelHead}>
             <h2>近期告警</h2>
-            <Link to="/ops">Ops →</Link>
+            <Link to="/ops">运维 →</Link>
           </div>
-          <DataTable headers={["severity", "内容", "时间"]} empty="无告警">
+          <DataTable
+            headers={["级别", "内容", "时间"]}
+            empty="暂无告警"
+            isEmpty={(alertsQ.data ?? []).length === 0}
+          >
             {(alertsQ.data ?? []).slice(0, 8).map((a) => (
-              <tr key={String(a.alert_id ?? a.created_at ?? Math.random())}>
+              <tr key={s(a.alert_id ?? a.created_at)}>
                 <td>
                   <StatusPill
                     tone={
@@ -193,11 +217,11 @@ export function OverviewPage({
                         : "degraded"
                     }
                   >
-                    {String(a.severity ?? "—")}
+                    {statusZh(String(a.severity ?? "—"))}
                   </StatusPill>
                 </td>
-                <td>{String(a.message ?? a.title ?? "—")}</td>
-                <td className="mono">{String(a.created_at ?? "—")}</td>
+                <td>{s(a.message ?? a.title)}</td>
+                <td className="mono">{s(a.created_at)}</td>
               </tr>
             ))}
           </DataTable>
@@ -205,34 +229,48 @@ export function OverviewPage({
 
         <section className={styles.panel}>
           <div className={styles.panelHead}>
-            <h2>状态摘要</h2>
-            <Link to="/risk">Risk →</Link>
+            <h2>数据摘要</h2>
+            <Link to="/ledger">账本 →</Link>
           </div>
           <ul className={styles.summary}>
             <li>
-              Kill：{" "}
+              熔断：{" "}
               <StatusPill tone={isKillOn(killQ.data) ? "failed" : "ok"}>
-                {isKillOn(killQ.data) ? "ON" : "OFF"}
+                {isKillOn(killQ.data) ? "开启" : "关闭"}
               </StatusPill>
             </li>
             <li>
               策略版本： <strong>{stratQ.data?.length ?? 0}</strong>
             </li>
             <li>
-              组合： draft{" "}
+              组合：草稿{" "}
               <strong>
                 {portfolios.filter((p) => p.status === "draft").length}
               </strong>{" "}
-              / approved{" "}
+              / 已放行{" "}
               <strong>
                 {portfolios.filter((p) => p.status === "approved").length}
+              </strong>{" "}
+              / 已执行{" "}
+              <strong>
+                {portfolios.filter((p) => p.status === "executed").length}
               </strong>
             </li>
             <li>
-              账户 <code className="mono">{settings.accountId}</code>
+              执行批次： <strong>{exQ.data?.length ?? 0}</strong> · 未完成残差{" "}
+              <strong>{pendQ.data?.length ?? 0}</strong>
             </li>
-            <li className={styles.muted}>
-              pending / execution 列表 API 待 F1 后端补齐；Trade 页占位。
+            <li>
+              现金余额：{" "}
+              <strong>{cash !== null && Number.isFinite(cash) ? n(cash) : "—"}</strong>
+            </li>
+            <li>
+              持仓只数：{" "}
+              <strong>
+                {Array.isArray(ledgerQ.data?.positions)
+                  ? ledgerQ.data.positions.length
+                  : "—"}
+              </strong>
             </li>
           </ul>
         </section>

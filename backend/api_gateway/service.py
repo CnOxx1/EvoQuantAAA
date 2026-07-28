@@ -223,6 +223,27 @@ class GatewayService:
             return fail("NOT_FOUND", "execution_id 不存在", status=404)
         return ok(row)
 
+    def list_executions(
+        self, *, account_id: str | None = None, limit: int = 50
+    ) -> dict:
+        return ok(self.repo.list_executions(account_id=account_id, limit=limit))
+
+    def list_pending(
+        self,
+        *,
+        account_id: str | None = None,
+        status: str | None = "open",
+        limit: int = 100,
+    ) -> dict:
+        return ok(
+            self.repo.list_pending(
+                account_id=account_id, status=status, limit=limit
+            )
+        )
+
+    def list_research_runs(self, *, limit: int = 50) -> dict:
+        return ok(self.repo.list_research_runs(limit=limit))
+
     def get_ledger(self, account_id: str, *, as_of: str | None = None) -> dict:
         row = self.repo.get_ledger_account(account_id)
         if not row:

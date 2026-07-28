@@ -10,6 +10,7 @@ import {
 import { ApiError } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { StatusPill, toneFromStatus } from "../components/StatusPill";
+import { n, parseJsonField, s, statusZh } from "../lib/format";
 import styles from "./pages.module.css";
 
 export function RiskPage({
@@ -36,6 +37,10 @@ export function RiskPage({
   const [reason, setReason] = useState("");
   const [resultBox, setResultBox] = useState("");
 
+  const switches = (killQ.data?.kill_switches || []) as Array<
+    Record<string, unknown>
+  >;
+
   const mut = useMutation({
     mutationFn: (isOn: boolean) =>
       setKill(cfg, {
@@ -58,7 +63,7 @@ export function RiskPage({
 
   function onKill(e: FormEvent, isOn: boolean) {
     e.preventDefault();
-    if (isOn && !window.confirm("确认开启 Kill Switch？将阻止新开仓。")) return;
+    if (isOn && !window.confirm("确认开启熔断？开启后将阻止新开仓。")) return;
     mut.mutate(isOn);
   }
 
@@ -66,21 +71,44 @@ export function RiskPage({
     <div>
       <h1>风控</h1>
       <p className="lede">
-        Kill Switch 与决策列表。ADV/行业明细以决策返回为准。
+        熔断开关与审核决策。数据来自{" "}
+        <code className="mono">/v1/risk/kill</code> 与{" "}
+        <code className="mono">/v1/risk/decisions</code>。
       </p>
 
       <div className={styles.grid2}>
         <section className={`${styles.panel} ${styles.dangerPanel}`}>
-          <h2>Kill Switch</h2>
+          <h2>熔断开关（Kill Switch）</h2>
           <p className={styles.killStatus}>
-            当前：{" "}
+            汇总状态：{" "}
             <StatusPill tone={isKillOn(killQ.data) ? "failed" : "ok"}>
-              {isKillOn(killQ.data) ? "ON" : "OFF"}
+              {isKillOn(killQ.data) ? "开启" : "关闭"}
             </StatusPill>
           </p>
-          <form className={styles.form}>
+          <DataTable
+            headers={["作用域", "状态", "原因", "操作人", "更新时间"]}
+            empty="无熔断记录"
+            isEmpty={switches.length === 0}
+          >
+            {switches.map((row) => (
+              <tr key={s(row.scope_key)}>
+                <td className="mono">{s(row.scope_key)}</td>
+                <td>
+                  <StatusPill
+                    tone={Number(row.is_on) === 1 ? "failed" : "ok"}
+                  >
+                    {Number(row.is_on) === 1 ? "开启" : "关闭"}
+                  </StatusPill>
+                </td>
+                <td>{s(row.reason)}</td>
+                <td>{s(row.actor)}</td>
+                <td className="mono">{s(row.updated_at)}</td>
+              </tr>
+            ))}
+          </DataTable>
+          <form className={styles.form} style={{ marginTop: "0.85rem" }}>
             <label>
-              Scope
+              作用域
               <input
                 value={scope}
                 onChange={(e) => setScope(e.target.value)}
@@ -99,18 +127,18 @@ export function RiskPage({
               <button
                 type="button"
                 className={styles.danger}
-                disabled={mut.isPending}
+                disabled={mut.isPending || !connected}
                 onClick={(e) => onKill(e, true)}
               >
-                开启 Kill
+                开启熔断
               </button>
               <button
                 type="button"
                 className={styles.primary}
-                disabled={mut.isPending}
+                disabled={mut.isPending || !connected}
                 onClick={(e) => onKill(e, false)}
               >
-                解除 Kill
+                解除熔断
               </button>
             </div>
           </form>
@@ -118,23 +146,33 @@ export function RiskPage({
         </section>
 
         <section className={styles.panel}>
-          <h2>决策</h2>
+          <h2>审核决策（{decQ.data?.length ?? 0}）</h2>
           <DataTable
-            headers={["decision", "portfolio", "status", "time"]}
+            headers={["决策 ID", "组合", "结果", "违约数", "时间"]}
             empty="无决策"
+            isEmpty={(decQ.data ?? []).length === 0}
           >
-            {(decQ.data ?? []).map((d) => (
-              <tr key={String(d.decision_id ?? Math.random())}>
-                <td className="mono">{String(d.decision_id ?? "—")}</td>
-                <td className="mono">{String(d.portfolio_id ?? "—")}</td>
-                <td>
-                  <StatusPill tone={toneFromStatus(String(d.status))}>
-                    {String(d.status ?? "—")}
-                  </StatusPill>
-                </td>
-                <td className="mono">{String(d.created_at ?? "—")}</td>
-              </tr>
-            ))}
+            {(decQ.data ?? []).map((d) => {
+              const meta = parseJsonField(d.meta_json ?? d.meta);
+              return (
+                <tr key={s(d.decision_id)}>
+                  <td className="mono">{s(d.decision_id)}</td>
+                  <td className="mono">{s(d.portfolio_id).slice(0, 16)}</td>
+                  <td>
+                    <StatusPill tone={toneFromStatus(String(d.status))}>
+                      {statusZh(String(d.status))}
+                    </StatusPill>
+                  </td>
+                  <td>
+                    {n(d.breach_count, 0)}
+                    {meta.limits_version
+                      ? ` · ${String(meta.limits_version)}`
+                      : ""}
+                  </td>
+                  <td className="mono">{s(d.created_at)}</td>
+                </tr>
+              );
+            })}
           </DataTable>
         </section>
       </div>

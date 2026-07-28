@@ -151,11 +151,41 @@ def create_app() -> Any:
             svc.list_decisions(portfolio_id=portfolio_id, limit=limit)
         )
 
+    @app.get("/v1/executions")
+    def list_executions(
+        account_id: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_executions(account_id=account_id, limit=limit)
+        )
+
     @app.get("/v1/executions/{execution_id}")
     def get_execution(
         execution_id: str, _: str = Depends(require_actor)
     ) -> dict[str, Any]:
         return _emit(svc.get_execution(execution_id))
+
+    @app.get("/v1/execution/pending")
+    def list_pending(
+        account_id: str | None = None,
+        status: str | None = "open",
+        limit: int = Query(100, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_pending(
+                account_id=account_id, status=status, limit=limit
+            )
+        )
+
+    @app.get("/v1/research/runs")
+    def list_research_runs(
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_research_runs(limit=limit))
 
     @app.get("/v1/ledger/accounts/{account_id}")
     def get_ledger(

@@ -163,7 +163,7 @@
 | --- | --- | --- |
 | **F0** | 文档定稿；console 保持可用；补齐本方案 | ✅ |
 | **F1** | Vite App 壳 + Overview/Strategies/Risk/Portfolio 读+现有写 | ✅ `frontend/app` |
-| **F2** | Research/Backtest/Trade/Ledger/Ops 只读深化 | 待做 |
+| **F2** | Research/Trade/Ledger/Ops 只读深化 | ✅ 列表 API + 中文展示 |
 | **F3** | 受控写：schedule once、paper execution；live UI 锁死 | 待做 |
 | **F4** | （可选）gateway 托管静态资源；简易 RBAC | 待做 |
 

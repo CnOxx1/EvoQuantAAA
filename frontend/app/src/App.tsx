@@ -8,7 +8,10 @@ import { StrategiesPage } from "./pages/StrategiesPage";
 import { RiskPage } from "./pages/RiskPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { LedgerPage } from "./pages/LedgerPage";
+import { OpsPage } from "./pages/OpsPage";
+import { TradePage } from "./pages/TradePage";
+import { ResearchPage } from "./pages/ResearchPage";
 import { loadSettings, type Settings } from "./state/settings";
 
 export default function App() {
@@ -77,49 +80,29 @@ export default function App() {
           element={<RiskPage cfg={cfg} connected={connected} />}
         />
         <Route
-          path="settings"
-          element={
-            <SettingsPage settings={settings} onChange={setSettings} />
-          }
-        />
-        <Route
           path="research"
-          element={
-            <PlaceholderPage
-              title="Research"
-              phase="F2"
-              blurb="证据包 / freeze 只读浏览；待 research runs API。"
-            />
-          }
+          element={<ResearchPage cfg={cfg} connected={connected} />}
         />
         <Route
           path="trade"
           element={
-            <PlaceholderPage
-              title="Trade"
-              phase="F2"
-              blurb="execution / fills / pending 只读；默认不下单。"
-            />
+            <TradePage cfg={cfg} settings={settings} connected={connected} />
           }
         />
         <Route
           path="ledger"
           element={
-            <PlaceholderPage
-              title="Ledger"
-              phase="F2"
-              blurb="账户现金 / sleeve / 可卖深化视图。"
-            />
+            <LedgerPage cfg={cfg} settings={settings} connected={connected} />
           }
         />
         <Route
           path="ops"
+          element={<OpsPage cfg={cfg} connected={connected} />}
+        />
+        <Route
+          path="settings"
           element={
-            <PlaceholderPage
-              title="Ops"
-              phase="F2"
-              blurb="告警确认 / coverage / schedule 状态。"
-            />
+            <SettingsPage settings={settings} onChange={setSettings} />
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

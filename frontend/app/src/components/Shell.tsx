@@ -5,16 +5,22 @@ import { isKillOn, type KillStatus } from "../api/gateway";
 import styles from "./Shell.module.css";
 
 const NAV = [
-  { to: "/", label: "Overview", end: true },
-  { to: "/strategies", label: "Strategies" },
-  { to: "/portfolio", label: "Portfolio" },
-  { to: "/risk", label: "Risk" },
-  { to: "/research", label: "Research" },
-  { to: "/trade", label: "Trade" },
-  { to: "/ledger", label: "Ledger" },
-  { to: "/ops", label: "Ops" },
-  { to: "/settings", label: "Settings" },
+  { to: "/", label: "总览", end: true },
+  { to: "/strategies", label: "策略" },
+  { to: "/portfolio", label: "组合" },
+  { to: "/risk", label: "风控" },
+  { to: "/research", label: "研究" },
+  { to: "/trade", label: "交易" },
+  { to: "/ledger", label: "账本" },
+  { to: "/ops", label: "运维" },
+  { to: "/settings", label: "设置" },
 ];
+
+const ENV_ZH: Record<string, string> = {
+  research: "研究",
+  paper: "纸面",
+  live: "实盘",
+};
 
 export function Shell({
   settings,
@@ -33,23 +39,25 @@ export function Shell({
       <header className={styles.top}>
         <div className={styles.brandBlock}>
           <span className={styles.brand}>EvoQuantAAA</span>
-          <span className={styles.env}>{settings.env}</span>
+          <span className={styles.env}>
+            {ENV_ZH[settings.env] || settings.env}
+          </span>
           {settings.env === "live" ? (
-            <span className={styles.liveWarn}>live UI 默认锁死</span>
+            <span className={styles.liveWarn}>实盘界面默认锁定</span>
           ) : null}
         </div>
         <div className={styles.topMeta}>
           <span className={styles.metaItem}>
-            as-of <code className="mono">{settings.asOf}</code>
+            业务日 <code className="mono">{settings.asOf}</code>
           </span>
           <span className={styles.metaItem}>
-            Kill{" "}
+            熔断{" "}
             <StatusPill tone={killOn ? "failed" : "ok"}>
-              {killOn ? "ON" : "OFF"}
+              {killOn ? "开启" : "关闭"}
             </StatusPill>
           </span>
           <StatusPill tone={connected ? "ok" : "failed"}>
-            {connected ? "API" : "离线"}
+            {connected ? "已连接" : "未连接"}
           </StatusPill>
           <button type="button" className={styles.refresh} onClick={onRefresh}>
             刷新
@@ -73,7 +81,7 @@ export function Shell({
             ))}
           </nav>
           <p className={styles.sideNote}>
-            只经 api_gateway · 不直连库 · 执行默认只读
+            仅经 api_gateway 取数 · 禁止直连数据库 · 本台不下单
           </p>
         </aside>
         <main className={styles.main}>

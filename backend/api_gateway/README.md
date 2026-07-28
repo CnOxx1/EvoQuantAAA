@@ -52,7 +52,10 @@
 | POST | `/v1/risk/kill` | 设置 Kill Switch `{scope, is_on, reason?}` |
 | POST | `/v1/risk/review` | `{portfolio_id}` 或 `{drafts, as_of}` |
 | GET | `/v1/risk/decisions` | 决策列表 |
-| GET | `/v1/executions/{id}` | 执行+成交 |
+| GET | `/v1/executions` | 执行批次列表 `?account_id=&limit=` |
+| GET | `/v1/executions/{id}` | 执行+委托+成交 |
+| GET | `/v1/execution/pending` | 残差列表 `?account_id=&status=open` |
+| GET | `/v1/research/runs` | 研究运行列表 |
 | GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 |
 | GET | `/v1/ops/alerts` | 告警 |
 
