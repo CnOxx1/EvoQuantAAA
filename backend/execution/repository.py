@@ -287,6 +287,27 @@ class ExecutionRepository:
             if r["adv"] is not None
         }
 
+    def load_adapter_params(self, kind: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT kind, enabled, allow_fills, require_live_env, meta_json
+                FROM execution_adapter_params WHERE kind=?
+                """,
+                ((kind or "paper").strip().lower(),),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        meta = d.get("meta_json")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except json.JSONDecodeError:
+                meta = {}
+        d["meta"] = meta if isinstance(meta, dict) else {}
+        return d
+
     def list_approved_portfolios(
         self, *, as_of: str | None = None, account_id: str | None = None, limit: int = 50
     ) -> list[dict[str, Any]]:

@@ -12,7 +12,7 @@
 
 ## 本目录模块一览
 
-命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`036`。
+命名：`NNN_<feature>.sql`（零填充）。当前：`001`–`037`。
 
 | 文件 | 要点 |
 | --- | --- |
@@ -43,6 +43,7 @@
 | `034_risk_adv_industry.sql` | `risk_limits` 行业/ADV 列 + 种子 `v2_adv_industry` |
 | `035_impact_cost.sql` | `cost_params` 冲击列 + 种子 `v2_sqrt_impact` |
 | `036_evidence_freeze.sql` | `research_evidence_freeze`（OOS 证据固化） |
+| `037_execution_adapters.sql` | `execution_adapter_params`（paper / broker_stub） |
 
 应用：`cd backend && python main.py migrate`（幂等记入 `schema_migrations`）。
 

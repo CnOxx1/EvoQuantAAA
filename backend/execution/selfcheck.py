@@ -23,6 +23,25 @@ def _run_mock() -> None:
     assert abs(fill_price("SELL", 10.0, cost) - 9.995) < 1e-9
     assert commission(1000, cost) == 5.0  # min
 
+    from execution.adapters import get_adapter
+    from execution.adapters.base import AdapterContext
+    from execution.adapters.broker_stub import REJECT_REASON
+
+    stub_orders, stub_fills = get_adapter("broker_stub").execute(
+        [
+            {
+                "symbol": "A",
+                "side": "BUY",
+                "qty": 100,
+                "reject": False,
+                "mid_price": 10.0,
+            }
+        ],
+        AdapterContext(cost=cost, trade_date="2026-07-28", cash=10_000),
+    )
+    assert stub_fills == []
+    assert stub_orders[0]["reason"] == REJECT_REASON
+
     cost_imp = CostSnapshot(
         version="t2",
         commission_rate=0.0,

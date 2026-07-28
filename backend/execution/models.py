@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-AdapterKind = Literal["paper"]
+AdapterKind = Literal["paper", "broker_stub"]
+ADAPTER_CHOICES: tuple[AdapterKind, ...] = ("paper", "broker_stub")
 
 
 @dataclass

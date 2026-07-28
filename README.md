@@ -65,9 +65,10 @@
 | 策略晋升 + 质量门 | ✅ | DRAFT→…→LIVE；IC/DD/样本窗（`032`） |
 | 生产信号 / 组合 / 风控 | ✅ | PAPER/LIVE；Kill Switch；账户合并敞口；**v2 行业/ADV** |
 | 纸面 OMS + 账本 | ✅ | 差额成交；sleeve；冲击与回测同口径；残差 pending 续撮 |
+| 执行适配器 | ✅ | `paper` / `broker_stub`（stub dry-run 拒单、永不成交） |
 | 日更编排 / 告警 | ✅ | `schedule`；`factor_refresh`；pending resume；`ops_alert` |
 | API + E2E + console | ✅ | `/v1`；`python main.py e2e`；运维台含写操作 |
-| 实盘柜台 | ❌ | 仅 paper adapter |
+| 真实券商 SDK | ❌ | 须独立环境开关；本机禁止实盘 |
 | 长窗数据回填 | ⏳ | 工具已就绪；勿在本机 ALL_LISTED bulk |
 
 **开发机约束**：只做短窗冒烟（几天～约 1 个月、TOP100 或单票）。**禁止** ALL_LISTED（6000+）长窗 bulk、禁止本机长历史回填。
@@ -80,7 +81,7 @@
 EvoQuantAAA
 ├── README.md                      # 本文件（入口手册）
 ├── ARCHITECTURE_PRINCIPLES.md     # 强制架构与合入清单
-├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 18b）
+├── DEVELOPMENT_PLAN.md            # 分阶段任务书（现至 20）
 ├── docker-compose.yml
 ├── backend/                       # 业务实现 + 统一 CLI
 │   ├── main.py                    # python main.py …
@@ -93,7 +94,7 @@ EvoQuantAAA
 │   ├── orchestrator/ ops_monitor/ api_gateway/
 │   ├── e2e/ tests/
 ├── database/
-│   ├── migrations/                # 001–036（新文件从 037 起）
+│   ├── migrations/                # 001–037（新文件从 038 起）
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
@@ -325,8 +326,9 @@ cd frontend/console && python -m http.server 8081
 | 生产信号 | `python main.py signal run --live --as-of YYYY-MM-DD` |
 | 组合草稿 | `python main.py portfolio build --version sv_… --as-of … --account paper_default` |
 | 风控审核 | `python main.py risk review --portfolio pf_…` |
-| 纸面执行 | `python main.py execution run --portfolio pf_…`（CLI 内对有 fill 的 committed 即时 post） |
-| 残差续撮 | `python main.py execution resume-pending --as-of YYYY-MM-DD` |
+| 纸面执行 | `python main.py execution run --portfolio pf_… [--adapter paper\|broker_stub]`（有 fill 的 committed 即时 post） |
+| 残差续撮 | `python main.py execution resume-pending --as-of YYYY-MM-DD [--adapter paper]` |
+| 适配器列表 | `python main.py execution adapters` |
 | 残差列表 | `python main.py execution list-pending --account paper_default` |
 | 账本 | `python main.py ledger post --execution ex_…` / `ledger show --account …` |
 | Kill | `python main.py risk kill --on/--off` |
@@ -551,7 +553,7 @@ cd frontend/console && python -m http.server 8081
 ### 2026-07-27 · 阶段 8：纸面执行（execution）
 - **动机**：风控放行后需要 OMS 事件层（尚未接真实柜台）。
 - **迁移**：`026_execution.sql` → `execution_run` / `order_event` / `fill_event`。
-- **行为**：仅 `approved` + 最新 risk approved + Kill off；paper 适配器即时成交；费用读 `cost_params`；成功后 portfolio→`executed`；CLI `execution run|list|show`；schedule 接在 risk 后。
+- **行为**：仅 `approved` + 最新 risk approved + Kill off；`--adapter paper|broker_stub`（默认 paper；stub 永不成交）；费用读 `cost_params`；成功后 portfolio→`executed`；CLI `execution run|list|show|adapters`；schedule 接在 risk 后且固定 paper。
 - **验收**：approved 可 committed；kill on / 非 approved → blocked。
 - **提交**：含于 `a7e2f59`。（后续阶段 11/14/15 将「空仓全买」演进为差额 / 现金 / sleeve。）
 

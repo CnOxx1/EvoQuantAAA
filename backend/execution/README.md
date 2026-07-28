@@ -15,7 +15,12 @@
 
 
 ## 本目录模块一览
-无子模块；本目录即单一业务模块实现。核心：`paper.py`（意图/成交/残差）、`service.py`（portfolio run + resume_pending）。
+
+| 路径 | 作用 |
+| --- | --- |
+| `paper.py` | 意图 / 纸面撮合 / 残差（纯函数） |
+| `adapters/` | 可插拔执行适配器：`paper`、`broker_stub` |
+| `service.py` | portfolio run + resume_pending |
 
 ## 协作模块索引（供 AI Agent）
 
@@ -31,8 +36,23 @@
 | frontend/trade | `../../frontend/trade/README.md` | 交易 UI | 下游 |
 
 ## 边界
-- 做：门禁（approved + risk_decision + kill off）→ 纸面意图 → 事件；残差 pending；续撮；成功后 portfolio→executed（仅 portfolio 类）。
-- 不做：直接改现金/持仓（属 ledger）；实盘柜台；绕过 risk（portfolio 类）。
+- 做：门禁（approved + risk_decision + kill off）→ 意图 → **适配器**成交/拒单 → 事件；残差 pending；续撮；成功后 portfolio→executed（仅 portfolio 类）。
+- 不做：直接改现金/持仓（属 ledger）；**真实券商 SDK / 密钥 / 网络下单**（`broker_stub` 仅为骨架，一律拒单）。
+
+## 适配器（阶段 20）
+
+| kind | 成交 | 说明 |
+| --- | --- | --- |
+| `paper` | 是 | 默认；即时撮合（含冲击成本版本） |
+| `broker_stub` | **永不** | dry-run 拒单 `dry_run_no_live`；无网络/无密钥 |
+
+参数表：`execution_adapter_params`（迁移 `037`）。`allow_fills=0` 时即使适配器误返回 fill 也会被服务层清空。schedule 默认仍走 `paper`。
+
+```bash
+python main.py execution adapters
+python main.py execution run --portfolio pf_xxx --adapter paper
+python main.py execution run --portfolio pf_xxx --adapter broker_stub   # 仅测拒单路径
+```
 
 ## 纸面口径
 - 读 **本策略 sleeve** 做差额 BUY/SELL

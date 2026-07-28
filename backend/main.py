@@ -803,8 +803,10 @@ def cmd_execution(args: argparse.Namespace) -> int:
             cost_version=args.cost_version,
             strategy_version=getattr(args, "strategy_version", None),
             job_id=args.job_id,
+            adapter=getattr(args, "adapter", "paper") or "paper",
         )
     elif action == "run":
+        adapter = getattr(args, "adapter", "paper") or "paper"
         if args.approved:
             results = svc.run_approved(
                 as_of=args.as_of,
@@ -812,12 +814,14 @@ def cmd_execution(args: argparse.Namespace) -> int:
                 cost_version=args.cost_version,
                 force=bool(args.force),
                 job_id=args.job_id,
+                adapter=adapter,
             )
         elif args.portfolio:
             results = [
                 svc.run(
                     ExecutionRequest(
                         portfolio_id=args.portfolio,
+                        adapter=adapter,  # type: ignore[arg-type]
                         cost_version=args.cost_version,
                         force=bool(args.force),
                         job_id=args.job_id,
@@ -827,6 +831,14 @@ def cmd_execution(args: argparse.Namespace) -> int:
         else:
             print("status=invalid message=需要 --portfolio 或 --approved")
             return 2
+    elif action == "adapters":
+        from execution.adapters import list_adapters
+
+        rows = list_adapters()
+        print(f"status=ok count={len(rows)}")
+        for r in rows:
+            print(f"adapter={r['kind']} fills={r['fills']} note={r['note']}")
+        return 0
     else:
         print(f"status=invalid message=unknown action {action}")
         return 2
@@ -3049,7 +3061,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rk_show.add_argument("--decision", required=True)
     p_rk_show.set_defaults(func=cmd_risk)
 
-    p_ex = sub.add_parser("execution", help="纸面 OMS：订单/成交事件（不过账）")
+    p_ex = sub.add_parser("execution", help="OMS：订单/成交事件（不过账）")
     ex_sub = p_ex.add_subparsers(dest="execution_action", required=True)
 
     p_ex_run = ex_sub.add_parser("run", help="执行 approved 组合")
@@ -3062,6 +3074,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ex_run.add_argument("--as-of", default=None)
     p_ex_run.add_argument("--account", default=None)
     p_ex_run.add_argument("--cost-version", default="v1_ashare_default")
+    p_ex_run.add_argument(
+        "--adapter",
+        default="paper",
+        choices=["paper", "broker_stub"],
+        help="paper=即时撮合；broker_stub=柜台骨架（一律拒单，无真实下单）",
+    )
     p_ex_run.add_argument(
         "--force",
         action="store_true",
@@ -3087,6 +3105,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ex_res.add_argument("--account", default="paper_default")
     p_ex_res.add_argument("--strategy-version", default=None)
     p_ex_res.add_argument("--cost-version", default="v1_ashare_default")
+    p_ex_res.add_argument(
+        "--adapter",
+        default="paper",
+        choices=["paper", "broker_stub"],
+        help="默认 paper；schedule 勿改用 broker_stub",
+    )
     p_ex_res.add_argument("--job-id", default=None)
     p_ex_res.set_defaults(func=cmd_execution)
 
@@ -3099,6 +3123,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ex_lp.add_argument("--limit", type=int, default=50)
     p_ex_lp.set_defaults(func=cmd_execution)
+
+    p_ex_ad = ex_sub.add_parser("adapters", help="列出已注册执行适配器")
+    p_ex_ad.set_defaults(func=cmd_execution)
 
     p_ld = sub.add_parser("ledger", help="成交过账 / 余额 / T+1 可卖")
     ld_sub = p_ld.add_subparsers(dest="ledger_action", required=True)

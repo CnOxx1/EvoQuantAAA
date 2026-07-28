@@ -6,12 +6,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from execution.adapters import AdapterContext, get_adapter
 from execution.models import ExecutionRequest, ExecutionResult
 from execution.paper import (
     build_paper_intents,
     build_pending_intents,
     compute_residuals,
-    simulate_paper_fills,
 )
 from execution.repository import ExecutionRepository
 
@@ -205,12 +205,22 @@ class ExecutionService:
                 meta={"kill_scopes": kill_scopes},
             )
 
-        if request.adapter != "paper":
+        try:
+            adapter = get_adapter(request.adapter)
+        except KeyError as exc:
             return ExecutionResult(
                 status="invalid",
                 execution_id=execution_id,
                 portfolio_id=request.portfolio_id,
-                message=f"暂不支持 adapter={request.adapter}",
+                message=str(exc),
+            )
+        gate = self.repo.load_adapter_params(request.adapter)
+        if gate is not None and int(gate.get("enabled") or 0) != 1:
+            return ExecutionResult(
+                status="invalid",
+                execution_id=execution_id,
+                portfolio_id=request.portfolio_id,
+                message=f"adapter={request.adapter} 未启用",
             )
 
         try:
@@ -280,13 +290,29 @@ class ExecutionService:
             current_shares=current_shares,
             sellable_shares=sellable,
         )
-        orders_raw, fills_raw = simulate_paper_fills(
-            intents=intents,
-            cost=cost,
-            trade_date=trade_date,
-            cash=cash,
-            lot_size=cost.lot_size,
+        orders_raw, fills_raw = adapter.execute(
+            intents,
+            AdapterContext(
+                cost=cost,
+                trade_date=trade_date,
+                cash=cash,
+                lot_size=cost.lot_size,
+                meta={"portfolio_id": request.portfolio_id},
+            ),
         )
+        # 安全网：allow_fills=0 的适配器不得留下成交
+        if gate is not None and int(gate.get("allow_fills") or 0) != 1 and fills_raw:
+            fills_raw = []
+            orders_raw = [
+                {
+                    **o,
+                    "status": "REJECTED",
+                    "reason": o.get("reason") or "adapter_disallow_fills",
+                }
+                if str(o.get("status")) == "FILLED"
+                else o
+                for o in orders_raw
+            ]
         residuals = compute_residuals(
             intents=intents,
             orders=orders_raw,
@@ -415,6 +441,7 @@ class ExecutionService:
         strategy_version: str | None = None,
         job_id: str | None = None,
         factor_type: str = "qfq",
+        adapter: str = "paper",
     ) -> list[ExecutionResult]:
         """续撮 open pending（按 sleeve）；同日同 sleeve 幂等跳过。"""
         as_of_d = as_of[:10]
@@ -438,6 +465,15 @@ class ExecutionService:
                     status="skipped",
                     account_id=account_id,
                     message="无 open execution_pending",
+                )
+            ]
+
+        try:
+            get_adapter(adapter)
+        except KeyError as exc:
+            return [
+                ExecutionResult(
+                    status="invalid", account_id=account_id, message=str(exc)
                 )
             ]
 
@@ -480,6 +516,7 @@ class ExecutionService:
                     cost_version=cost_version,
                     job_id=job_id,
                     factor_type=factor_type,
+                    adapter_kind=adapter,
                 )
             )
         return results
@@ -495,6 +532,7 @@ class ExecutionService:
         cost_version: str,
         job_id: str | None,
         factor_type: str,
+        adapter_kind: str = "paper",
     ) -> ExecutionResult:
         execution_id = f"ex_{uuid.uuid4().hex}"
         created = _utcnow()
@@ -524,13 +562,30 @@ class ExecutionService:
         intents = build_pending_intents(
             pendings=pendings, bars=bars, sellable_shares=sellable
         )
-        orders_raw, fills_raw = simulate_paper_fills(
-            intents=intents,
-            cost=cost,
-            trade_date=as_of,
-            cash=cash,
-            lot_size=cost.lot_size,
+        adapter = get_adapter(adapter_kind)
+        gate = self.repo.load_adapter_params(adapter_kind)
+        orders_raw, fills_raw = adapter.execute(
+            intents,
+            AdapterContext(
+                cost=cost,
+                trade_date=as_of,
+                cash=cash,
+                lot_size=cost.lot_size,
+                meta={"run_kind": "pending_resume"},
+            ),
         )
+        if gate is not None and int(gate.get("allow_fills") or 0) != 1 and fills_raw:
+            fills_raw = []
+            orders_raw = [
+                {
+                    **o,
+                    "status": "REJECTED",
+                    "reason": o.get("reason") or "adapter_disallow_fills",
+                }
+                if str(o.get("status")) == "FILLED"
+                else o
+                for o in orders_raw
+            ]
         residuals = compute_residuals(
             intents=intents,
             orders=orders_raw,
@@ -591,7 +646,7 @@ class ExecutionService:
             )
 
         meta: dict[str, Any] = {
-            "adapter": "paper",
+            "adapter": adapter_kind,
             "run_kind": "pending_resume",
             "resume": True,
             "strategy_version": strategy_version,
@@ -612,7 +667,7 @@ class ExecutionService:
                     "execution_id": execution_id,
                     "portfolio_id": portfolio_id,
                     "account_id": account_id,
-                    "adapter": "paper",
+                    "adapter": adapter_kind,
                     "as_of_date": as_of,
                     "decision_id": None,
                     "cost_version": cost_version,
@@ -668,6 +723,7 @@ class ExecutionService:
         force: bool = False,
         job_id: str | None = None,
         limit: int = 50,
+        adapter: str = "paper",
     ) -> list[ExecutionResult]:
         rows = self.repo.list_approved_portfolios(
             as_of=as_of, account_id=account_id, limit=limit
@@ -682,6 +738,7 @@ class ExecutionService:
             self.run(
                 ExecutionRequest(
                     portfolio_id=str(r["portfolio_id"]),
+                    adapter=adapter,  # type: ignore[arg-type]
                     cost_version=cost_version,
                     force=force,
                     job_id=job_id,
