@@ -94,7 +94,7 @@ EvoQuantAAA
 │   ├── orchestrator/ ops_monitor/ api_gateway/
 │   ├── e2e/ tests/
 ├── database/
-│   ├── migrations/                # 001–038（新文件从 039 起）
+│   ├── migrations/                # 001–039（新文件从 040 起）
 │   ├── schema/                    # 产消登记（权威）
 │   └── seeds/
 ├── frontend/
@@ -346,7 +346,7 @@ cd ../frontend/app && npm install && npm run dev
 3. 跨模块经库交接，只传 ID。  
 4. 调度只经 `orchestrator`；对外只经 `api_gateway`。  
 5. 合入前：本文件 changelog **顶部**追加；更新相关模块 README；勾选 [架构原则 §6](./ARCHITECTURE_PRINCIPLES.md#6-合入前检查清单)。  
-6. 新表 = 新迁移 `039+`；不得改写已发布迁移。
+6. 新表 = 新迁移 `040+`；不得改写已发布迁移。
 
 ---
 
@@ -359,7 +359,7 @@ cd ../frontend/app && npm install && npm run dev
 | sleeve 回填 | 迁移 `031` 将旧仓写入 `strategy_version=''`；与命名 sleeve 并存时账户合计 NAV 可能偏高（见 [ledger README](./backend/ledger/README.md)） |
 | 开发机数据 | 短窗 / TOP100；覆盖度与实盘研究不可等同；`research_evidence_freeze` 本机通常为 0 |
 | console | 运维台：Kill / 晋升 / 风控审核经 gateway；跳过质量门须原因 |
-| 协作约定迁移号 | §12 仍写「新表=034+」为历史口径；实际新迁移从 **`039`** 起 |
+| 协作约定迁移号 | §12 仍写「新表=034+」为历史口径；实际新迁移从 **`040`** 起（已用到 `039`） |
 
 ---
 
@@ -367,8 +367,8 @@ cd ../frontend/app && npm install && npm run dev
 
 （详见 [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)）：
 
-1. 前端 F2：Research / Trade / Ledger / Ops 只读深化（补 gateway 列表 API）  
-2. 真实券商 SDK（厂商选型 + `allow_fills` + 独立环境；本机禁止）  
+1. 回测指标 + 晋升门 v2（Sharpe / 超额 / 换手）
+2. 真实券商 SDK（厂商选型 + `allow_fills` + 独立环境；本机禁止）
 3. 在有历史数据的环境跑长窗 OOS + `--freeze`（勿本机 ALL_LISTED bulk）
 
 ---
@@ -398,8 +398,100 @@ cd ../frontend/app && npm install && npm run dev
 | 20 | `037` | 执行适配器 `paper` / `broker_stub` |
 | 21 | `038` | 实盘闸门 `live_gated` + `ASHARE_ALLOW_LIVE` |
 | F1 | （无） | 前端 SPA：`frontend/app` Overview/Strategies/Portfolio/Risk |
+| F2 | `039` | 因子定义 `research_factor_def` + UI 注册/TECH_PASS/重算 |
 
 ---
+
+### 2026-07-30 · TECH_PASS：注册任意技术指标为因子
+- **动机**：不做公式 DSL 时，仍需把已落库 tech 指标纳入研究/策略可选因子。
+- **迁移**：无（沿用 `039`）。
+- **模块**：模板 `TECH_PASS`；Factors 页指标目录搜索选择；透传 `processed_tech_indicator_1d`。
+- **行为**：注册如 `TECH_RSI_14` / `TECH_BOLL_UPPER` → 计算 UPSERT → 策略可选用。
+- **验收**：注册 TECH_PASS + 计算后截面可见。
+
+### 2026-07-30 · 前端可注册/修改/计算因子
+- **动机**：因子页只读，无法从 UI 增改因子。
+- **迁移**：`039` `research_factor_def`（模板 + 参数；种子 6 个内置）。
+- **模块**：research_lab 模板化计算；`POST/PATCH /v1/research/factor-defs`、`POST /v1/research/runs`；Factors 管理页。
+- **行为**：按 MOM/FLOW_NET/TECH_* 等模板注册（如 MOM_30）；改参后重算 UPSERT 截面；非任意公式。
+- **验收**：migrate 039；注册 MOM_30 → 计算 → 目录可见；策略可选用新码。
+
+### 2026-07-30 · 量化终端：交易日 / DQ·Kill 门禁 / 纸面过账 / NAV
+- **动机**：业务日可落在休市日；纸面停在 exec 未过账；总览看不到当日 DQ/Kill/NAV。
+- **迁移**：无。
+- **模块**：`tradeCalendar`；Shell/Settings 交易日选择；Overview `DayStatusBar`；PaperPipeline 五步含过账；ledger `mark_ledger_nav`；Trade 未过账过滤。
+- **行为**：非开市/DQ 未过/Kill ON 阻断纸面；账本展示现金·市值·NAV·相对开户盈亏；日历可一键设 as_of。
+- **验收**：顶栏改业务日即时生效；一键流水线日志含第 5 步过账；账本 as_of 有 NAV。
+
+### 2026-07-30 · 前端可用性：不可用按钮与前置条件
+- **动机**：测试时部分按钮无反应或失败原因不透明（HTTP 400 包在 detail、缺 as_of、只读页像可写）。
+- **迁移**：无。
+- **模块**：`gateway.ts` 错误解包；PaperPipeline 阻断提示；Schedule skipped 警告；Kill 在 live 仍可；只读页 Tag；Settings 业务日必填；Shell 熔断/业务日可点。
+- **行为**：写操作禁用时带 title；组合审核仅 draft；回测页链到 DQ/编排；信号页可跑 PAPER。
+- **验收**：缺业务日/PAPER/live 时按钮禁用并提示；失败 Message 显示后端 message。
+
+### 2026-07-29 · 纸面闭环体感：一键流水线 + 回测晋升
+- **动机**：注册后不知道下一步；纸面四步要手点；回测只能 CLI。
+- **迁移**：无。
+- **模块**：`POST /v1/backtest/runs`；Strategies 引导条 / 跑回测并晋升；Overview「一键跑通纸面」。
+- **行为**：DRAFT→选或跑回测→BACKTESTED→PAPER→总览一键 signal/build/review/exec；Steps 进度。
+- **验收**：注册后弹出晋升；一键流水线四步有日志。
+
+### 2026-07-29 · 策略注册 API + 前端表单
+- **动机**：策略页只能晋升，无法登记 DRAFT；注册此前仅 CLI。
+- **迁移**：无。
+- **模块**：`POST /v1/strategies`；前端 Strategies「注册策略」；冻结列表字段对齐后端。
+- **行为**：FACTOR_TOP_N 参数校验与 CLI 一致；写审计；live 环境 UI 锁定。
+- **验收**：注册返回 `strategy_version`；列表可见 DRAFT。
+
+### 2026-07-29 · 前端体验优化
+- **动机**：live 写锁不一致、图表 loading/空态混淆、双导航拥挤、窄屏难用、asOf 不同步。
+- **迁移**：无。
+- **模块**：共享图表 `loading`；Shell 分区顶栏 + 窄屏抽屉侧栏；Overview / Schedule / Ingest / Process / Settings 等。
+- **行为**：策略晋升/组合审核/Kill 在 live 锁定；图表 Spin；步骤 Tag 条；批次行打开 Drawer；业务日 DatePicker + 页内同步；时间序列就地更新并带图例。
+- **验收**：相关页可渲染；无新依赖。
+
+### 2026-07-29 · 图表可视化（三）
+- **动机**：Universe / DQ / 取数 / 加工 / 告警 / 编排 / 策略注册仍以表为主。
+- **迁移**：无。
+- **模块**：`chartAgg`；接入 Universe、DQ、Ingest、Process、Ops、Schedule、Strategies、Freezes、Adapters。
+- **行为**：行业/ST/成员趋势；DQ 门禁与规则状态；取数 lane/模块；加工 kind；告警级别；编排活动 kind/状态与步骤条；策略状态与类型。
+- **验收**：相关页可渲染；无新依赖。
+
+### 2026-07-29 · 图表可视化（续）
+- **动机**：组合/信号/风控/账本/交易仍缺占比与排名图。
+- **迁移**：无。
+- **模块**：`PieChart` / `HorizontalBars`；接入 Portfolio / Signals / Risk / Ledger / Trade。
+- **行为**：权重饼图、信号值排名、决策结果与违规分布、持仓/可卖、执行状态与残差/成交额。
+- **验收**：相关页可渲染；无新依赖。
+
+### 2026-07-29 · 图表可视化
+- **动机**：回测/研究/覆盖/总览仍以表为主，难一眼读趋势与缺口。
+- **迁移**：无。
+- **模块**：`frontend/app` 新增 `TimeSeriesChart` / `CategoryBars` / `Heatmap`；接入总览、回测、研究、覆盖率、因子、板块。
+- **行为**：回测 NAV+基准+回撤；研究分层柱；覆盖热力；因子截面直方图；板块收盘曲线；总览管道计数柱。
+- **验收**：页面可渲染；无新依赖（沿用 lightweight-charts）。
+
+### 2026-07-29 · 前端露出更多后端模块（三）
+- **动机**：编排/审计/F10/账本细节仍偏 CLI；需活动时间线与受控日更入口。
+- **迁移**：无。
+- **模块**：`api_gateway` `/v1/ops/audit`、`/v1/ops/activity`、`POST /v1/ops/schedule/once`、`/v1/ledger/accounts`；ledger 详情附 sleeve/lot/posting；前端 F10 / 审计 / 日更编排页。
+- **行为**：live 锁定 schedule 写；账本页分 Tab；模块地图链到新路由。
+- **验收**：只读新路径 200；文档同步。
+
+### 2026-07-29 · 前端露出更多后端模块（续）
+- **动机**：加工批次、参考参数、资本配额、因子截面仍只能 CLI 查。
+- **迁移**：无。
+- **模块**：`api_gateway` `/v1/data/process/batches`、`/v1/ref/*`、`/v1/ledger/capital-alloc`、`/v1/research/factors*`；前端 Process / Params / Capital / Factors 页。
+- **行为**：数据中心可看 process_batch；系统「参考参数」含费用/风控限额/晋升门；组合「资本配额」；研究「因子值」目录+截面。
+- **验收**：新路径 200；文档同步。
+
+### 2026-07-29 · 前端露出更多后端模块
+- **动机**：运维台未覆盖取数 / Universe / 信号 / 证据冻结 / 适配器等模块，只能靠 CLI。
+- **迁移**：无。
+- **模块**：`api_gateway` 新增只读 `/v1/modules`、`/v1/signal/batches/{id}`、`/v1/universe/snapshots*`、`/v1/data/ingest/batches`、`/v1/execution/adapters`、`/v1/research/freezes`；`frontend/app` 对应页 + 导航。
+- **行为**：系统「模块地图」聚合各表行数并跳转；策略研究含生产信号/证据冻结；数据中心含 Universe/取数批次；系统含执行适配器。
+- **验收**：gateway 新路径 200；`npm run typecheck`；文档同步。
 
 ### 2026-07-28 · 前端补齐：详情做深 + 纸面闭环
 - **动机**：网关只读详情薄；纸面生产链仅 CLI。

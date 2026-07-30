@@ -3,8 +3,8 @@
 > 本文档是一份**可直接执行的开发任务书**。按阶段顺序开发；每个任务给出：背景、涉及文件、当前行为、目标行为、验收标准。
 > 执行前请先通读「0. 项目约定」，违反不变量的实现一律返工。
 
-**当前进度**：阶段 **1–21** 已落地（迁移 `001`–`038`）。前端按方案 **B（React + Arco Design）** 重建于 `frontend/app`。  
-**下一优先**：真实券商 SDK / 长窗 OOS / K 线与技术指标 API。  
+**当前进度**：阶段 **1–21** 已落地（迁移 `001`–`039`）。前端按方案 **B（React + Arco Design）** 重建于 `frontend/app`（含因子注册 / 纸面闭环 / 交易日门禁）。  
+**下一优先**：真实券商 SDK / 长窗 OOS。  
 **入口文档**：根 [`README.md`](./README.md) · [`ARCHITECTURE_PRINCIPLES.md`](./ARCHITECTURE_PRINCIPLES.md) · [`frontend/README.md`](./frontend/README.md)
 
 ---
@@ -24,7 +24,7 @@
 - 写库用 `shared/bulk_upsert.py`；批次经 `data_ingest/ingest_common/batch.py::BatchManager`（ingest 侧）或各自 batch 表
 - 外部 HTTP（akshare）统一经 `shared/akshare_call.py::call_with_retry`
 - Universe 解析用 `shared/universe_resolve.py`（CLI 传 `--universe TOP100`）
-- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `038`（live_gated），**新迁移从 `039` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
+- 新表 = 新迁移：`database/migrations/NNN_<feature>.sql`，当前已到 `039`（`research_factor_def`），**新迁移从 `040` 开始**；不得改已发布迁移；同步更新 `database/migrations/README.md` 与 `database/schema/README.md` 产消表
 - 每个模块提供 `python -m <包路径>.selfcheck`：用 mock 数据走通全链路并 assert
 
 ### 0.3 量化不变量（违反即返工）
@@ -54,7 +54,8 @@
 | 覆盖度矩阵 `python main.py coverage` | `backend/ops_monitor/coverage.py` |
 | 日线技术指标 `data_process --kind tech_indicator` | `backend/data_process/tech_indicator.py` |
 | 分钟 K 15m/60m | `core_market` + `data_process` + `processed_tech_indicator_min` |
-| tech 派生研究因子 TECH_* | `backend/research_lab/`（经库读 tech 表） |
+| tech 派生研究因子 TECH_* | `backend/research_lab/`（经库读 tech 表；`TECH_PASS` 可注册任意指标码） |
+| 因子定义表 | `research_factor_def`（迁移 `039`）；UI/gateway 注册与重算 |
 | 日更 ALPHA含 stock_flow | `orchestrator/scheduler.py` / `cmd_daily --with-alpha` |
 | 策略注册 + 生产信号 | `strategy_registry` / `signal_prod`（迁移 `023`；晋升门 `032`） |
 | 目标持仓草稿 | `portfolio_construct`（迁移 `024`） |
@@ -601,3 +602,4 @@ CREATE TABLE IF NOT EXISTS research_run (
 | 20 | 20.1 执行适配器 | paper / broker_stub 协议 + CLI |
 | 21 | 21.1 实盘闸门 | live_gated + ASHARE_ALLOW_LIVE fail-closed |
 | F1 | F1.1 运维 SPA | frontend/app Overview/Strategies/Portfolio/Risk |
+| F2 | F2.1 因子定义 UI | `039` research_factor_def + TECH_PASS |

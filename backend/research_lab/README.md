@@ -13,18 +13,22 @@
 
 迁移：`017_research_lab.sql`、`036_evidence_freeze.sql`。
 
-## 基线因子
+## 基线因子 / 可注册模板
 
-| factor_code | 定义 | 数据源（点时） |
+| factor_code（种子） | 模板 | 定义 |
 | --- | --- | --- |
-| `MOM_20` | `adj_close_t / adj_close_{t-20} - 1` | `processed_equity_bar_1d` |
-| `VAL_PE_PCT` | 当日 Universe 内 PE-TTM 截面分位；PE≤0→最差档 1.0 | `raw_valuation_1d.pe_ttm` |
-| `FLOW_NET_5` | 近 5 日主力净流入之和 / 近 5 日成交额之和 | `raw_money_flow`（STOCK_FLOW）+ 日线 `amount` |
-| `TECH_RSI_14` | 透传 `RSI_14` | `processed_tech_indicator_1d` |
-| `TECH_MACD_HIST` | 透传 `MACD_HIST` | `processed_tech_indicator_1d` |
-| `TECH_MA20_BIAS` | `adj_close / MA_20 - 1` | tech `MA_20` + processed 日线 |
+| `MOM_20` | `MOM` | `adj_close_t / adj_close_{t-N} - 1`（N=lookback） |
+| `VAL_PE_PCT` | `VAL_PE_PCT` | 当日 Universe 内 PE-TTM 截面分位 |
+| `FLOW_NET_5` | `FLOW_NET` | 近 N 日主力净流入 / 成交额 |
+| `TECH_*` | `TECH_PASS` | 透传任意 `processed_tech_indicator_1d.indicator_code` |
+
+迁移 `039`：`research_factor_def`；UI/gateway 可注册新码（如 `MOM_30`）并 `POST /v1/research/runs` 计算。
 
 技术指标因子依赖先跑：`data_process --kind tech_indicator`（日更 `daily` 已含 suite=core）。
+
+## 边界
+- 做：模板化因子定义与计算、落库、IC/分层评估；写 `research_*`；消费已落库 tech 指标。
+- 不做：任意公式 DSL；直接写生产信号；调用 execution；绕过 DQ（除非显式 `--no-dq-check`）；算技术指标本身（属 `data_process`）。
 
 ## 研究证据包与冻结
 
@@ -63,10 +67,6 @@ python -m pytest tests/test_research_evidence.py -q
 | strategy_registry | `../strategy_registry/README.md` | 晋升 | LIVE 质量门读本表 IC 报告 |
 | orchestrator | `../orchestrator/README.md` | 日更 | `factor_refresh` 调本模块重算 LIVE 因子 |
 | signal_prod | `../signal_prod/README.md` | 生产信号 | 下游只读本表（经库） |
-
-## 边界
-- 做：因子纯函数计算、落库、IC/分层评估；写 `research_*`；消费已落库 tech 指标。
-- 不做：通用因子框架；直接写生产信号；调用 execution；绕过 DQ（除非显式 `--no-dq-check`）；算技术指标本身（属 `data_process`）。
 
 ## 运行
 

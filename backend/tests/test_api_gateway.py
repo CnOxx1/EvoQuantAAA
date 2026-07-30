@@ -43,3 +43,35 @@ def test_app_health():
     assert r.status_code == 200 and r.json()["ok"] is True
     r2 = client.get("/v1/strategies")
     assert r2.status_code == 200 and r2.json()["ok"] is True
+
+
+def test_modules_and_new_reads():
+    pytest = __import__("pytest")
+    try:
+        from fastapi.testclient import TestClient
+        from api_gateway.app import create_app
+    except ImportError:
+        pytest.skip("fastapi not installed")
+    client = TestClient(create_app())
+    for path in (
+        "/v1/modules",
+        "/v1/universe/snapshots",
+        "/v1/data/ingest/batches",
+        "/v1/data/process/batches",
+        "/v1/execution/adapters",
+        "/v1/research/freezes",
+        "/v1/research/factors",
+        "/v1/ref/cost-params",
+        "/v1/ref/risk-limits",
+        "/v1/ref/promotion-gates",
+        "/v1/ref/promotion-gate-results",
+        "/v1/ledger/capital-alloc",
+        "/v1/ledger/accounts",
+        "/v1/ops/audit",
+        "/v1/ops/activity",
+        "/v1/signal/batches",
+    ):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        body = r.json()
+        assert body.get("ok") is True, path

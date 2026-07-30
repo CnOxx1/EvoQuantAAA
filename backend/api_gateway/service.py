@@ -142,6 +142,82 @@ class GatewayService:
         )
         return body
 
+    def register_strategy(
+        self,
+        *,
+        strategy_code: str,
+        strategy_kind: str,
+        factor_code: str,
+        top_n: int,
+        rebalance_days: int,
+        universe_code: str,
+        factor_type: str,
+        research_run_id: str | None,
+        backtest_run_id: str | None,
+        note: str | None,
+        actor: str,
+    ) -> dict:
+        from strategy_registry.models import RegisterRequest
+        from strategy_registry.service import StrategyRegistryService
+
+        result = StrategyRegistryService().register(
+            RegisterRequest(
+                strategy_code=strategy_code,
+                strategy_kind=strategy_kind,  # type: ignore[arg-type]
+                params={
+                    "factor_code": factor_code,
+                    "top_n": top_n,
+                    "rebalance_days": rebalance_days,
+                    "universe_code": universe_code,
+                    "factor_type": factor_type,
+                },
+                research_run_id=research_run_id,
+                backtest_run_id=backtest_run_id,
+                note=note,
+                actor=actor,
+            )
+        )
+        req = {
+            "strategy_code": strategy_code,
+            "strategy_kind": strategy_kind,
+            "factor_code": factor_code,
+            "top_n": top_n,
+            "rebalance_days": rebalance_days,
+            "universe_code": universe_code,
+            "factor_type": factor_type,
+            "research_run_id": research_run_id,
+            "backtest_run_id": backtest_run_id,
+            "note": note,
+        }
+        if result.status == "ok":
+            body = ok(
+                {
+                    "status": result.status,
+                    "strategy_version": result.strategy_version,
+                    "strategy_code": result.strategy_code,
+                    "from_status": result.from_status,
+                    "to_status": result.to_status,
+                    "meta": result.meta,
+                }
+            )
+            code = 200
+        else:
+            body = fail(
+                result.status.upper(),
+                result.message or result.status,
+                status=400,
+            )
+            code = 400
+        self._audit(
+            actor=actor,
+            method="POST",
+            path="/v1/strategies",
+            status_code=code,
+            request=req,
+            result=body,
+        )
+        return body
+
     def list_portfolios(
         self, *, status: str | None = None, as_of: str | None = None, limit: int = 50
     ) -> dict:
@@ -379,6 +455,104 @@ class GatewayService:
             return fail("NOT_FOUND", "backtest run 不存在", status=404)
         return ok(row)
 
+    def run_backtest(
+        self,
+        *,
+        strategy: str,
+        start: str,
+        end: str,
+        universe: str,
+        factor_type: str,
+        factor: str | None,
+        top_n: int,
+        rebalance_days: int,
+        benchmark: str,
+        cash: float,
+        require_dq: bool,
+        cost_version: str,
+        actor: str,
+    ) -> dict:
+        from backtest.models import BacktestRequest
+        from backtest.service import BacktestService
+
+        req = {
+            "strategy": strategy,
+            "start": start,
+            "end": end,
+            "universe": universe,
+            "factor_type": factor_type,
+            "factor": factor,
+            "top_n": top_n,
+            "rebalance_days": rebalance_days,
+            "benchmark": benchmark,
+            "cash": cash,
+            "require_dq": require_dq,
+            "cost_version": cost_version,
+        }
+        try:
+            result = BacktestService().run(
+                BacktestRequest(
+                    strategy_code=strategy,  # type: ignore[arg-type]
+                    start=start,
+                    end=end,
+                    universe_code=universe,
+                    factor_type=factor_type,
+                    cost_version=cost_version,
+                    benchmark_index=benchmark,
+                    initial_cash=cash,
+                    require_dq=require_dq,
+                    rebalance_days=rebalance_days,
+                    research_factor=factor,
+                    top_n=top_n,
+                )
+            )
+        except ValueError as exc:
+            body = fail("INVALID", str(exc), status=400)
+            self._audit(
+                actor=actor,
+                method="POST",
+                path="/v1/backtest/runs",
+                status_code=400,
+                request=req,
+                result=body,
+            )
+            return body
+
+        payload = {
+            "status": result.status,
+            "run_id": result.run_id,
+            "strategy_code": result.strategy_code,
+            "start": result.start,
+            "end": result.end,
+            "final_nav": result.final_nav,
+            "total_return": result.total_return,
+            "benchmark_return": result.benchmark_return,
+            "max_drawdown": result.max_drawdown,
+            "trade_count": result.trade_count,
+            "message": result.message,
+            "meta": result.meta,
+        }
+        if result.status == "committed":
+            body = ok(payload)
+            code = 200
+        else:
+            body = fail(
+                result.status.upper(),
+                result.message or result.status,
+                status=400,
+                run_id=result.run_id,
+            )
+            code = 400
+        self._audit(
+            actor=actor,
+            method="POST",
+            path="/v1/backtest/runs",
+            status_code=code,
+            request=req,
+            result=body,
+        )
+        return body
+
     def search_securities(
         self, *, q: str, as_of: str | None = None, limit: int = 20
     ) -> dict:
@@ -536,10 +710,350 @@ class GatewayService:
             row["sellable"] = LedgerService().sellable_report(
                 account_id=account_id, as_of=as_of
             )
+            mark = self.repo.mark_ledger_nav(account_id, as_of)
+            if mark:
+                row["mark"] = mark
+                row["nav"] = mark.get("nav")
+                row["market_value"] = mark.get("market_value")
+                row["pnl"] = mark.get("pnl")
+                row["pnl_pct"] = mark.get("pnl_pct")
         return ok(row)
 
     def list_alerts(self, *, limit: int = 20) -> dict:
         return ok(self.repo.list_alerts(limit=limit))
+
+    def list_modules(self) -> dict:
+        return ok(self.repo.list_module_catalog())
+
+    def get_signal_batch(self, signal_batch_id: str) -> dict:
+        row = self.repo.get_signal_batch(signal_batch_id)
+        if not row:
+            return fail("NOT_FOUND", "signal_batch 不存在", status=404)
+        return ok(row)
+
+    def list_universe_snapshots(
+        self, *, universe_code: str | None = None, limit: int = 50
+    ) -> dict:
+        return ok(
+            self.repo.list_universe_snapshots(
+                universe_code=universe_code, limit=limit
+            )
+        )
+
+    def get_universe_snapshot(self, universe_snapshot_id: str) -> dict:
+        row = self.repo.get_universe_snapshot(universe_snapshot_id)
+        if not row:
+            return fail("NOT_FOUND", "universe_snapshot 不存在", status=404)
+        return ok(row)
+
+    def list_ingest_batches(
+        self,
+        *,
+        lane: str | None = None,
+        module: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        return ok(
+            self.repo.list_ingest_batches(lane=lane, module=module, limit=limit)
+        )
+
+    def list_execution_adapters(self) -> dict:
+        return ok(self.repo.list_execution_adapters())
+
+    def list_evidence_freezes(self, *, limit: int = 50) -> dict:
+        return ok(self.repo.list_evidence_freezes(limit=limit))
+
+    def list_process_batches(
+        self, *, kind: str | None = None, limit: int = 50
+    ) -> dict:
+        return ok(self.repo.list_process_batches(kind=kind, limit=limit))
+
+    def list_cost_params(self) -> dict:
+        return ok(self.repo.list_cost_params())
+
+    def list_risk_limits(self) -> dict:
+        return ok(self.repo.list_risk_limits())
+
+    def list_promotion_gate_params(self) -> dict:
+        return ok(self.repo.list_promotion_gate_params())
+
+    def list_promotion_gate_results(self, *, limit: int = 50) -> dict:
+        return ok(self.repo.list_promotion_gate_results(limit=limit))
+
+    def list_capital_alloc(self, *, account_id: str | None = None) -> dict:
+        return ok(self.repo.list_capital_alloc(account_id=account_id))
+
+    def list_factor_catalog(self) -> dict:
+        return ok(self.repo.list_factor_catalog())
+
+    def list_factor_defs(self, *, status: str | None = "ACTIVE") -> dict:
+        from research_lab.service import ResearchService
+
+        # status="" → 全部
+        st: str | None
+        if status is None:
+            st = "ACTIVE"
+        elif status == "":
+            st = None
+        else:
+            st = status
+        return ok(ResearchService().list_factor_defs(status=st))
+
+    def register_factor_def(
+        self,
+        *,
+        factor_code: str,
+        template: str,
+        params: dict,
+        display_name: str,
+        description: str | None,
+        status: str,
+        actor: str,
+    ) -> dict:
+        from research_lab.models import FactorDefUpsert
+        from research_lab.service import ResearchService
+
+        req = {
+            "factor_code": factor_code,
+            "template": template,
+            "params": params,
+            "display_name": display_name,
+            "description": description,
+            "status": status,
+        }
+        try:
+            row = ResearchService().register_factor_def(
+                FactorDefUpsert(
+                    factor_code=factor_code,
+                    template=template,
+                    params=params or {},
+                    display_name=display_name,
+                    description=description,
+                    status=status,
+                    actor=actor,
+                )
+            )
+            body = ok(row)
+            code = 200
+        except ValueError as exc:
+            body = fail("INVALID", str(exc), status=400)
+            code = 400
+        self._audit(
+            actor=actor,
+            method="POST",
+            path="/v1/research/factor-defs",
+            status_code=code,
+            request=req,
+            result=body,
+        )
+        return body
+
+    def update_factor_def(
+        self,
+        factor_code: str,
+        *,
+        display_name: str | None,
+        params: dict | None,
+        description: str | None,
+        status: str | None,
+        actor: str,
+    ) -> dict:
+        from research_lab.service import ResearchService
+
+        req = {
+            "factor_code": factor_code,
+            "display_name": display_name,
+            "params": params,
+            "description": description,
+            "status": status,
+        }
+        try:
+            row = ResearchService().update_factor_def(
+                factor_code,
+                display_name=display_name,
+                params=params,
+                description=description,
+                status=status,
+            )
+            body = ok(row)
+            code = 200
+        except ValueError as exc:
+            body = fail("INVALID", str(exc), status=400)
+            code = 400
+        self._audit(
+            actor=actor,
+            method="PATCH",
+            path=f"/v1/research/factor-defs/{factor_code}",
+            status_code=code,
+            request=req,
+            result=body,
+        )
+        return body
+
+    def run_research_factor(
+        self,
+        *,
+        factor_code: str,
+        start: str,
+        end: str,
+        universe_code: str,
+        factor_type: str,
+        require_dq: bool,
+        actor: str,
+    ) -> dict:
+        from research_lab.models import ResearchRequest
+        from research_lab.service import ResearchService
+
+        req = {
+            "factor_code": factor_code,
+            "start": start,
+            "end": end,
+            "universe_code": universe_code,
+            "factor_type": factor_type,
+            "require_dq": require_dq,
+        }
+        try:
+            result = ResearchService().run(
+                ResearchRequest(
+                    factor_code=factor_code,
+                    start=start,
+                    end=end,
+                    universe_code=universe_code,
+                    factor_type=factor_type,
+                    require_dq=require_dq,
+                )
+            )
+        except ValueError as exc:
+            body = fail("INVALID", str(exc), status=400)
+            self._audit(
+                actor=actor,
+                method="POST",
+                path="/v1/research/runs",
+                status_code=400,
+                request=req,
+                result=body,
+            )
+            return body
+
+        payload = {
+            "status": result.status,
+            "run_id": result.run_id,
+            "factor_code": result.factor_code,
+            "universe_code": result.universe_code,
+            "start": result.start,
+            "end": result.end,
+            "row_count": result.row_count,
+            "message": result.message,
+            "meta": result.meta,
+        }
+        if result.status == "committed":
+            body = ok(payload)
+            code = 200
+        else:
+            body = fail(
+                result.status.upper(),
+                result.message or result.status,
+                status=400,
+                result=payload,
+            )
+            code = 400
+        self._audit(
+            actor=actor,
+            method="POST",
+            path="/v1/research/runs",
+            status_code=code,
+            request=req,
+            result=body,
+        )
+        return body
+
+    def list_factor_values(
+        self,
+        *,
+        factor_code: str,
+        universe_code: str | None = None,
+        as_of: str | None = None,
+        limit: int = 200,
+    ) -> dict:
+        return ok(
+            self.repo.list_factor_values(
+                factor_code=factor_code,
+                universe_code=universe_code,
+                as_of=as_of,
+                limit=limit,
+            )
+        )
+
+    def list_audit_logs(self, *, limit: int = 50) -> dict:
+        return ok(self.repo.list_audit_logs(limit=limit))
+
+    def list_ledger_accounts(self) -> dict:
+        return ok(self.repo.list_ledger_accounts())
+
+    def list_ops_activity(self, *, limit: int = 40) -> dict:
+        return ok(self.repo.list_ops_activity(limit=limit))
+
+    def run_schedule_once(
+        self,
+        *,
+        as_of: str,
+        universe: str,
+        factor_type: str,
+        force: bool,
+        actor: str,
+    ) -> dict:
+        day = (as_of or "")[:10]
+        if not day:
+            return fail("BAD_REQUEST", "as_of 必填", status=400)
+        from orchestrator.scheduler import run_once
+
+        result = run_once(
+            as_of=day,
+            universe=universe or "TOP100",
+            factor_type=factor_type or "qfq",
+            force=force,
+        )
+        payload = {
+            "job_id": result.job_id,
+            "as_of": result.as_of,
+            "status": result.status,
+            "message": result.message,
+            "steps": [
+                {
+                    "name": s.name,
+                    "status": s.status,
+                    "exit_code": s.exit_code,
+                    "message": s.message,
+                    "ref_ids": s.ref_ids,
+                }
+                for s in result.steps
+            ],
+        }
+        ok_status = result.status in ("committed", "skipped", "degraded")
+        body = (
+            ok(payload)
+            if ok_status
+            else fail(
+                "FAILED",
+                result.message or result.status,
+                status=400,
+                **payload,
+            )
+        )
+        self._audit(
+            actor=actor,
+            method="POST",
+            path="/v1/ops/schedule/once",
+            status_code=200 if body.get("ok") else 400,
+            request={
+                "as_of": day,
+                "universe": universe,
+                "factor_type": factor_type,
+                "force": force,
+            },
+            result=body,
+        )
+        return body
 
     def run_signal(
         self,

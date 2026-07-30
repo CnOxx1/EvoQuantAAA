@@ -24,9 +24,12 @@ from research_lab.factors import (
     compute_val_pe_pct,
 )
 from research_lab.models import (
+    BUILTIN_SPECS,
     FACTOR_CODES,
+    FACTOR_TEMPLATES,
     EvidenceRequest,
     EvidenceResult,
+    FactorDefUpsert,
     FreezeRequest,
     FreezeResult,
     ResearchRequest,
@@ -45,9 +48,147 @@ class ResearchService:
     def __init__(self, *, repo: ResearchRepository | None = None) -> None:
         self.repo = repo or ResearchRepository()
 
+    def resolve_factor_spec(self, factor_code: str) -> dict[str, Any]:
+        code = (factor_code or "").strip()
+        if not code:
+            raise ValueError("factor_code 必填")
+        row = self.repo.get_factor_def(code)
+        if row:
+            if str(row.get("status") or "").upper() != "ACTIVE":
+                raise ValueError(f"因子 {code} 状态为 {row.get('status')}，不可计算")
+            return {
+                "factor_code": code,
+                "template": str(row["template"]),
+                "params": dict(row.get("params") or {}),
+                "display_name": row.get("display_name") or code,
+            }
+        if code in BUILTIN_SPECS:
+            spec = BUILTIN_SPECS[code]
+            return {
+                "factor_code": code,
+                "template": spec["template"],
+                "params": dict(spec["params"]),
+                "display_name": code,
+            }
+        raise ValueError(
+            f"未知因子 {code}：请先在 research_factor_def 注册，或使用内置码 {', '.join(FACTOR_CODES)}"
+        )
+
+    def list_factor_defs(self, *, status: str | None = "ACTIVE") -> list[dict[str, Any]]:
+        try:
+            return self.repo.list_factor_defs(status=status)
+        except Exception:
+            # 迁移未应用时回退内置
+            now = _utcnow()
+            return [
+                {
+                    "factor_code": k,
+                    "display_name": k,
+                    "template": v["template"],
+                    "params": v["params"],
+                    "status": "ACTIVE",
+                    "is_builtin": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for k, v in BUILTIN_SPECS.items()
+            ]
+
+    def register_factor_def(self, req: FactorDefUpsert) -> dict[str, Any]:
+        code = (req.factor_code or "").strip().upper().replace(" ", "_")
+        if not code or not code.replace("_", "").isalnum():
+            raise ValueError("factor_code 仅允许字母数字下划线")
+        tmpl = (req.template or "").strip().upper()
+        if tmpl not in FACTOR_TEMPLATES:
+            raise ValueError(f"不支持的模板: {tmpl}；可选 {', '.join(FACTOR_TEMPLATES)}")
+        params = self._normalize_params(tmpl, dict(req.params or {}))
+        existing = self.repo.get_factor_def(code)
+        if existing and int(existing.get("is_builtin") or 0) == 1:
+            raise ValueError(f"内置因子 {code} 已存在，请用更新接口改参数/名称")
+        now = _utcnow()
+        return self.repo.upsert_factor_def(
+            {
+                "factor_code": code,
+                "display_name": (req.display_name or code).strip() or code,
+                "template": tmpl,
+                "params": params,
+                "description": req.description,
+                "status": (req.status or "ACTIVE").upper(),
+                "is_builtin": 0,
+                "created_by": req.actor,
+                "created_at": (existing or {}).get("created_at") or now,
+                "updated_at": now,
+            }
+        )
+
+    def update_factor_def(
+        self,
+        factor_code: str,
+        *,
+        display_name: str | None = None,
+        params: dict[str, Any] | None = None,
+        description: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        cur = self.repo.get_factor_def(factor_code)
+        if not cur:
+            raise ValueError(f"因子不存在: {factor_code}")
+        patch: dict[str, Any] = {"updated_at": _utcnow()}
+        if display_name is not None:
+            patch["display_name"] = display_name.strip() or cur["factor_code"]
+        if description is not None:
+            patch["description"] = description
+        if status is not None:
+            st = status.strip().upper()
+            if st not in ("ACTIVE", "RETIRED"):
+                raise ValueError("status 仅 ACTIVE|RETIRED")
+            patch["status"] = st
+        if params is not None:
+            patch["params"] = self._normalize_params(
+                str(cur["template"]), dict(params)
+            )
+        return self.repo.update_factor_def(factor_code, patch)  # type: ignore[return-value]
+
+    def _normalize_params(
+        self, template: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        t = template.upper()
+        out: dict[str, Any] = {}
+        if t == "MOM":
+            lb = int(params.get("lookback", 20))
+            if lb < 2 or lb > 250:
+                raise ValueError("MOM.lookback 需在 2~250")
+            out["lookback"] = lb
+        elif t == "FLOW_NET":
+            lb = int(params.get("lookback", 5))
+            if lb < 2 or lb > 60:
+                raise ValueError("FLOW_NET.lookback 需在 2~60")
+            out["lookback"] = lb
+        elif t == "TECH_PASS":
+            code = str(params.get("indicator_code") or "").strip().upper()
+            if not code or not code.replace("_", "").isalnum():
+                raise ValueError("TECH_PASS 需要合法 indicator_code（如 RSI_14 / MACD_HIST）")
+            if len(code) > 64:
+                raise ValueError("indicator_code 过长")
+            out["indicator_code"] = code
+        elif t == "TECH_RSI":
+            p = int(params.get("period", 14))
+            if p < 2 or p > 100:
+                raise ValueError("TECH_RSI.period 需在 2~100")
+            out["period"] = p
+        elif t == "TECH_MA_BIAS":
+            p = int(params.get("period", 20))
+            if p < 2 or p > 250:
+                raise ValueError("TECH_MA_BIAS.period 需在 2~250")
+            out["period"] = p
+        elif t in ("VAL_PE_PCT", "TECH_MACD_HIST"):
+            out = {}
+        else:
+            raise ValueError(f"未知模板 {template}")
+        return out
+
     def run(self, request: ResearchRequest) -> ResearchResult:
-        if request.factor_code not in FACTOR_CODES:
-            raise ValueError(f"不支持的因子: {request.factor_code}")
+        spec = self.resolve_factor_spec(request.factor_code)
         if not (request.start and request.end):
             raise ValueError("需要 --start 与 --end")
         start, end = request.start[:10], request.end[:10]
@@ -97,6 +238,8 @@ class ResearchService:
             "symbol_count": len(symbols),
             "factor_type": request.factor_type,
             "job_id": request.job_id,
+            "template": spec["template"],
+            "params": spec["params"],
         }
         self.repo.create_run(
             {
@@ -112,7 +255,15 @@ class ResearchService:
         )
 
         try:
-            rows = self._compute(request, symbols=symbols, start=start, end=end)
+            rows = self._compute(
+                factor_code=request.factor_code,
+                template=str(spec["template"]),
+                params=dict(spec["params"]),
+                factor_type=request.factor_type,
+                symbols=symbols,
+                start=start,
+                end=end,
+            )
             n = self.repo.upsert_factor_values(
                 rows=rows,
                 factor_code=request.factor_code,
@@ -157,24 +308,30 @@ class ResearchService:
 
     def _compute(
         self,
-        request: ResearchRequest,
         *,
+        factor_code: str,
+        template: str,
+        params: dict[str, Any],
+        factor_type: str,
         symbols: list[str],
         start: str,
         end: str,
     ) -> list[dict[str, Any]]:
-        code = request.factor_code
-        if code == "MOM_20":
+        t = template.upper()
+        if t == "MOM":
+            lookback = int(params.get("lookback", 20))
             bars = self.repo.load_equity_bars(
                 start=start,
                 end=end,
                 symbols=symbols,
-                factor_type=request.factor_type,
-                lookback_calendar_days=60,
+                factor_type=factor_type,
+                lookback_calendar_days=max(60, lookback * 3),
             )
-            return compute_mom_20(bars, start=start, end=end)
+            return compute_mom_20(
+                bars, start=start, end=end, lookback=lookback
+            )
 
-        if code == "VAL_PE_PCT":
+        if t == "VAL_PE_PCT":
             vals = self.repo.load_valuations(
                 start=start, end=end, symbols=symbols
             )
@@ -182,66 +339,98 @@ class ResearchService:
                 vals, symbols=set(symbols), start=start, end=end
             )
 
-        if code == "FLOW_NET_5":
+        if t == "FLOW_NET":
+            lookback = int(params.get("lookback", 5))
             flows = self.repo.load_stock_flows(
-                start=start, end=end, symbols=symbols, lookback_calendar_days=14
+                start=start,
+                end=end,
+                symbols=symbols,
+                lookback_calendar_days=max(14, lookback * 3),
             )
             bars = self.repo.load_equity_bars(
                 start=start,
                 end=end,
                 symbols=symbols,
-                factor_type=request.factor_type,
-                lookback_calendar_days=14,
+                factor_type=factor_type,
+                lookback_calendar_days=max(14, lookback * 3),
             )
-            return compute_flow_net_5(flows, bars, start=start, end=end)
+            return compute_flow_net_5(
+                flows, bars, start=start, end=end, lookback=lookback
+            )
 
-        if code == "TECH_RSI_14":
+        if t == "TECH_PASS":
+            ind = str(params.get("indicator_code") or "").strip().upper()
+            if not ind:
+                raise ValueError("TECH_PASS 缺少 indicator_code")
             tech = self.repo.load_tech_indicators(
                 start=start,
                 end=end,
                 symbols=symbols,
-                factor_type=request.factor_type,
-                indicator_codes=["RSI_14"],
+                factor_type=factor_type,
+                indicator_codes=[ind],
+            )
+            rows = compute_tech_level(
+                tech, indicator_code=ind, start=start, end=end
+            )
+            if not rows:
+                raise ValueError(
+                    f"无技术指标 {ind} 数据：请先 "
+                    f"python main.py data_process --kind tech_indicator"
+                )
+            return rows
+
+        if t == "TECH_RSI":
+            period = int(params.get("period", 14))
+            ind = f"RSI_{period}"
+            tech = self.repo.load_tech_indicators(
+                start=start,
+                end=end,
+                symbols=symbols,
+                factor_type=factor_type,
+                indicator_codes=[ind],
             )
             return compute_tech_level(
-                tech, indicator_code="RSI_14", start=start, end=end
+                tech, indicator_code=ind, start=start, end=end
             )
 
-        if code == "TECH_MACD_HIST":
+        if t == "TECH_MACD_HIST":
             tech = self.repo.load_tech_indicators(
                 start=start,
                 end=end,
                 symbols=symbols,
-                factor_type=request.factor_type,
+                factor_type=factor_type,
                 indicator_codes=["MACD_HIST"],
             )
             return compute_tech_level(
                 tech, indicator_code="MACD_HIST", start=start, end=end
             )
 
-        if code == "TECH_MA20_BIAS":
+        if t == "TECH_MA_BIAS":
+            period = int(params.get("period", 20))
+            ma_code = f"MA_{period}"
             tech = self.repo.load_tech_indicators(
                 start=start,
                 end=end,
                 symbols=symbols,
-                factor_type=request.factor_type,
-                indicator_codes=["MA_20"],
+                factor_type=factor_type,
+                indicator_codes=[ma_code],
             )
             bars = self.repo.load_equity_bars(
                 start=start,
                 end=end,
                 symbols=symbols,
-                factor_type=request.factor_type,
+                factor_type=factor_type,
                 lookback_calendar_days=0,
             )
-            return compute_tech_ma20_bias(tech, bars, start=start, end=end)
+            return compute_tech_ma20_bias(
+                tech, bars, start=start, end=end, ma_code=ma_code
+            )
 
-        raise ValueError(f"不支持的因子: {code}")
+        raise ValueError(f"不支持的因子模板: {template} ({factor_code})")
 
     def evaluate(self, request: ResearchRequest) -> ResearchResult:
         """对已落库因子做 IC / 分层；结果写入 research_run.meta_json。"""
-        if request.factor_code not in FACTOR_CODES:
-            raise ValueError(f"不支持的因子: {request.factor_code}")
+        self.resolve_factor_spec(request.factor_code)
         start, end = request.start[:10], request.end[:10]
         run_id = f"re_{uuid.uuid4().hex}"
         created = _utcnow()
@@ -292,7 +481,7 @@ class ResearchService:
                 universe_code=request.universe_code,
                 start=start,
                 end=end,
-                message="无因子值，请先: python main.py research --factor ...",
+                message="无因子值，请先计算因子",
             )
 
         bars = self.repo.load_equity_bars(

@@ -93,7 +93,8 @@
 | universe_snapshot_member | ref_data | security_master | research_lab, signal_prod, portfolio_construct, backtest | (universe_snapshot_id, symbol) | 快照成员（含 ST/行业/权重） |
 | research_run | oltp | research_lab | strategy_registry, ops_monitor | run_id | 计算/评估/证据包；`meta_json` 含 IC/OOS |
 | research_evidence_freeze | oltp | research_lab | strategy_registry（引用） | freeze_id | 证据包冻结快照；artifact_hash 幂等 |
-| research_factor_value | oltp | research_lab | backtest, strategy_registry | (factor_code, symbol, trade_date, universe_code) | 基线因子值；点时=trade_date；幂等 UPSERT |
+| research_factor_value | oltp | research_lab | backtest, strategy_registry, api_gateway | (factor_code, symbol, trade_date, universe_code) | 基线/模板因子值；点时=trade_date；幂等 UPSERT |
+| research_factor_def | oltp | research_lab / api_gateway | research_lab, frontend | factor_code | 因子定义（模板+参数）；迁移 `039`；UI 可注册 TECH_PASS 等 |
 | research_* | oltp | research_lab | strategy_registry, backtest | run_id | 非 live |
 | strategy_version | oltp | strategy_registry | signal_prod, backtest | strategy_version | 状态机 DRAFT→…→LIVE；同 code 至多一 LIVE |
 | strategy_transition | oltp | strategy_registry | ops_monitor, api_gateway | transition_id | 晋升/停用审计 |

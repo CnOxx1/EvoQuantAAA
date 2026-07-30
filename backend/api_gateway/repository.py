@@ -820,10 +820,155 @@ class GatewayRepository:
                 """,
                 (account_id,),
             ).fetchall()
+            try:
+                sleeves = conn.execute(
+                    """
+                    SELECT strategy_version, symbol, qty, updated_at
+                    FROM ledger_sleeve_position
+                    WHERE account_id=? AND qty<>0
+                    ORDER BY strategy_version, symbol
+                    """,
+                    (account_id,),
+                ).fetchall()
+            except Exception:  # noqa: BLE001
+                sleeves = []
+            try:
+                lots = conn.execute(
+                    """
+                    SELECT lot_id, symbol, buy_date, qty_remaining,
+                           COALESCE(strategy_version, '') AS strategy_version,
+                           fill_id, created_at
+                    FROM ledger_lot
+                    WHERE account_id=? AND qty_remaining>0
+                    ORDER BY buy_date, symbol
+                    LIMIT 200
+                    """,
+                    (account_id,),
+                ).fetchall()
+            except Exception:  # noqa: BLE001
+                lots = []
+            postings = conn.execute(
+                """
+                SELECT posting_id, execution_id, status, as_of_date, entry_count,
+                       cash_after, error_message, created_at, finished_at
+                FROM ledger_posting
+                WHERE account_id=?
+                ORDER BY created_at DESC
+                LIMIT 30
+                """,
+                (account_id,),
+            ).fetchall()
         d = dict(acct)
         d["cash"] = float(cash["qty"]) if cash else float(d.get("opening_cash") or 0)
         d["positions"] = [dict(p) for p in positions]
+        d["sleeves"] = [dict(s) for s in sleeves]
+        d["lots"] = [dict(x) for x in lots]
+        d["postings"] = [dict(p) for p in postings]
         return d
+
+    def mark_ledger_nav(self, account_id: str, as_of: str) -> dict[str, Any]:
+        """Mark positions with latest raw close <= as_of (paper NAV)."""
+        day = (as_of or "")[:10]
+        if not day:
+            return {}
+        with get_conn() as conn:
+            cash_row = conn.execute(
+                """
+                SELECT qty FROM ledger_balance
+                WHERE account_id=? AND asset_type='CASH' AND symbol=''
+                """,
+                (account_id,),
+            ).fetchone()
+            acct = conn.execute(
+                "SELECT opening_cash FROM ledger_account WHERE account_id=?",
+                (account_id,),
+            ).fetchone()
+            cash = (
+                float(cash_row["qty"])
+                if cash_row
+                else float(acct["opening_cash"] if acct else 0)
+            )
+            try:
+                pos_rows = conn.execute(
+                    """
+                    SELECT symbol, SUM(qty) AS qty
+                    FROM ledger_sleeve_position
+                    WHERE account_id=? AND qty<>0
+                    GROUP BY symbol
+                    ORDER BY symbol
+                    """,
+                    (account_id,),
+                ).fetchall()
+            except Exception:  # noqa: BLE001
+                pos_rows = conn.execute(
+                    """
+                    SELECT symbol, qty
+                    FROM ledger_balance
+                    WHERE account_id=? AND asset_type='POSITION' AND qty<>0
+                    ORDER BY symbol
+                    """,
+                    (account_id,),
+                ).fetchall()
+            marked: list[dict[str, Any]] = []
+            market_value = 0.0
+            missing = 0
+            for r in pos_rows:
+                sym = str(r["symbol"] or "")
+                qty = float(r["qty"] or 0)
+                if not sym or qty == 0:
+                    continue
+                bar = conn.execute(
+                    """
+                    SELECT trade_date, close
+                    FROM processed_equity_bar_1d
+                    WHERE symbol=? AND trade_date<=? AND factor_type='qfq'
+                    ORDER BY trade_date DESC
+                    LIMIT 1
+                    """,
+                    (sym, day),
+                ).fetchone()
+                if not bar:
+                    bar = conn.execute(
+                        """
+                        SELECT trade_date, close
+                        FROM processed_equity_bar_1d
+                        WHERE symbol=? AND trade_date<=?
+                        ORDER BY trade_date DESC
+                        LIMIT 1
+                        """,
+                        (sym, day),
+                    ).fetchone()
+                # close = 未复权收盘；纸面持仓按实物股数计价
+                px = float(bar["close"]) if bar and bar["close"] is not None else None
+                mv = (px * qty) if px is not None else None
+                if mv is None:
+                    missing += 1
+                else:
+                    market_value += mv
+                marked.append(
+                    {
+                        "symbol": sym,
+                        "qty": qty,
+                        "price": px,
+                        "market_value": mv,
+                        "price_date": (
+                            str(bar["trade_date"])[:10] if bar else None
+                        ),
+                    }
+                )
+        nav = cash + market_value
+        opening = float(acct["opening_cash"]) if acct and acct["opening_cash"] is not None else cash
+        return {
+            "as_of": day,
+            "cash": cash,
+            "market_value": market_value,
+            "nav": nav,
+            "pnl": nav - opening,
+            "pnl_pct": (nav / opening - 1.0) if opening else None,
+            "position_count": len(marked),
+            "missing_prices": missing,
+            "marked_positions": marked,
+        }
 
     def list_alerts(self, *, limit: int = 20) -> list[dict[str, Any]]:
         with get_conn() as conn:
@@ -1420,3 +1565,687 @@ class GatewayRepository:
             "trade_days": [dict(r) for r in trade_days],
             "macro_news": [dict(r) for r in news],
         }
+
+    def list_module_catalog(self) -> dict[str, Any]:
+        """后端模块地图 + 表行数，供运维台导航。"""
+
+        def _count(conn: Any, sql: str) -> int:
+            try:
+                row = conn.execute(sql).fetchone()
+                return int(row["n"] if row else 0)
+            except Exception:  # noqa: BLE001
+                return 0
+
+        with get_conn() as conn:
+            counts = {
+                "ingest_batch": _count(conn, "SELECT COUNT(*) AS n FROM ingest_batch"),
+                "universe_snapshot": _count(
+                    conn, "SELECT COUNT(*) AS n FROM universe_snapshot"
+                ),
+                "dq_run": _count(conn, "SELECT COUNT(*) AS n FROM dq_run"),
+                "research_run": _count(conn, "SELECT COUNT(*) AS n FROM research_run"),
+                "research_evidence_freeze": _count(
+                    conn, "SELECT COUNT(*) AS n FROM research_evidence_freeze"
+                ),
+                "backtest_run": _count(conn, "SELECT COUNT(*) AS n FROM backtest_run"),
+                "strategy_version": _count(
+                    conn, "SELECT COUNT(*) AS n FROM strategy_version"
+                ),
+                "signal_batch": _count(conn, "SELECT COUNT(*) AS n FROM signal_batch"),
+                "portfolio_target": _count(
+                    conn, "SELECT COUNT(*) AS n FROM portfolio_target"
+                ),
+                "risk_decision": _count(conn, "SELECT COUNT(*) AS n FROM risk_decision"),
+                "execution_run": _count(conn, "SELECT COUNT(*) AS n FROM execution_run"),
+                "execution_adapter_params": _count(
+                    conn, "SELECT COUNT(*) AS n FROM execution_adapter_params"
+                ),
+                "ledger_posting": _count(
+                    conn, "SELECT COUNT(*) AS n FROM ledger_posting"
+                ),
+                "ops_alert": _count(conn, "SELECT COUNT(*) AS n FROM ops_alert"),
+                "process_batch": _count(
+                    conn, "SELECT COUNT(*) AS n FROM process_batch"
+                ),
+                "research_factor_value": _count(
+                    conn, "SELECT COUNT(*) AS n FROM research_factor_value"
+                ),
+                "cost_params": _count(conn, "SELECT COUNT(*) AS n FROM cost_params"),
+                "risk_limits": _count(conn, "SELECT COUNT(*) AS n FROM risk_limits"),
+                "promotion_gate_result": _count(
+                    conn, "SELECT COUNT(*) AS n FROM promotion_gate_result"
+                ),
+                "strategy_capital_alloc": _count(
+                    conn, "SELECT COUNT(*) AS n FROM strategy_capital_alloc"
+                ),
+                "api_audit_log": _count(
+                    conn, "SELECT COUNT(*) AS n FROM api_audit_log"
+                ),
+                "ledger_account": _count(
+                    conn, "SELECT COUNT(*) AS n FROM ledger_account"
+                ),
+            }
+
+        modules = [
+            {
+                "id": "data_ingest",
+                "name": "取数",
+                "path": "backend/data_ingest",
+                "route": "/data/ingest",
+                "count_key": "ingest_batch",
+                "desc": "CORE/ALPHA 外部取数批次",
+            },
+            {
+                "id": "data_process",
+                "name": "加工",
+                "path": "backend/data_process",
+                "route": "/data/process",
+                "count_key": "process_batch",
+                "desc": "复权/掩码/技术指标加工批次",
+            },
+            {
+                "id": "data_quality",
+                "name": "数据质量",
+                "path": "backend/data_quality",
+                "route": "/data/quality",
+                "count_key": "dq_run",
+                "desc": "DQ 规则与门禁",
+            },
+            {
+                "id": "security_master",
+                "name": "Universe",
+                "path": "backend/security_master",
+                "route": "/data/universe",
+                "count_key": "universe_snapshot",
+                "desc": "证券主数据与日快照",
+            },
+            {
+                "id": "research_lab",
+                "name": "研究实验",
+                "path": "backend/research_lab",
+                "route": "/research",
+                "count_key": "research_run",
+                "desc": "因子/IC/证据包",
+            },
+            {
+                "id": "research_factors",
+                "name": "因子值",
+                "path": "backend/research_lab",
+                "route": "/research/factors",
+                "count_key": "research_factor_value",
+                "desc": "research_factor_value 截面",
+            },
+            {
+                "id": "evidence_freeze",
+                "name": "证据冻结",
+                "path": "backend/research_lab",
+                "route": "/research/freezes",
+                "count_key": "research_evidence_freeze",
+                "desc": "OOS 证据冻结产物",
+            },
+            {
+                "id": "ref_params",
+                "name": "参考参数",
+                "path": "database/seeds",
+                "route": "/system/params",
+                "count_key": "cost_params",
+                "desc": "费用 / 风控限额 / 晋升门阈值",
+            },
+            {
+                "id": "capital_alloc",
+                "name": "资本配额",
+                "path": "backend/portfolio_construct",
+                "route": "/portfolio/capital",
+                "count_key": "strategy_capital_alloc",
+                "desc": "同账户多策略 NAV 切分",
+            },
+            {
+                "id": "backtest",
+                "name": "回测",
+                "path": "backend/backtest",
+                "route": "/backtest",
+                "count_key": "backtest_run",
+                "desc": "A 股约束回测",
+            },
+            {
+                "id": "strategy_registry",
+                "name": "策略注册",
+                "path": "backend/strategy_registry",
+                "route": "/strategies",
+                "count_key": "strategy_version",
+                "desc": "版本与晋升质量门",
+            },
+            {
+                "id": "signal_prod",
+                "name": "生产信号",
+                "path": "backend/signal_prod",
+                "route": "/signals",
+                "count_key": "signal_batch",
+                "desc": "已晋升策略日更权重",
+            },
+            {
+                "id": "portfolio_construct",
+                "name": "组合构建",
+                "path": "backend/portfolio_construct",
+                "route": "/portfolio",
+                "count_key": "portfolio_target",
+                "desc": "目标持仓草稿",
+            },
+            {
+                "id": "risk_engine",
+                "name": "风控",
+                "path": "backend/risk_engine",
+                "route": "/risk",
+                "count_key": "risk_decision",
+                "desc": "硬规则与 Kill Switch",
+            },
+            {
+                "id": "execution",
+                "name": "执行 OMS",
+                "path": "backend/execution",
+                "route": "/trade",
+                "count_key": "execution_run",
+                "desc": "纸面委托/成交/残差",
+            },
+            {
+                "id": "execution_adapters",
+                "name": "执行适配器",
+                "path": "backend/execution/adapters",
+                "route": "/system/adapters",
+                "count_key": "execution_adapter_params",
+                "desc": "paper / stub / live_gated",
+            },
+            {
+                "id": "ledger",
+                "name": "账本",
+                "path": "backend/ledger",
+                "route": "/ledger",
+                "count_key": "ledger_posting",
+                "desc": "过账与 T+1 可卖",
+            },
+            {
+                "id": "ops_monitor",
+                "name": "运维告警",
+                "path": "backend/ops_monitor",
+                "route": "/ops",
+                "count_key": "ops_alert",
+                "desc": "告警与覆盖度",
+            },
+            {
+                "id": "orchestrator",
+                "name": "编排",
+                "path": "backend/orchestrator",
+                "route": "/ops/schedule",
+                "count_key": None,
+                "desc": "日更 schedule / 活动时间线",
+            },
+            {
+                "id": "api_audit",
+                "name": "API 审计",
+                "path": "backend/api_gateway",
+                "route": "/system/audit",
+                "count_key": "api_audit_log",
+                "desc": "写操作审计日志",
+            },
+            {
+                "id": "api_gateway",
+                "name": "API 网关",
+                "path": "backend/api_gateway",
+                "route": "/settings",
+                "count_key": None,
+                "desc": "前端唯一入口",
+            },
+            {
+                "id": "market_f10",
+                "name": "F10 资料",
+                "path": "backend/api_gateway",
+                "route": "/market/f10",
+                "count_key": None,
+                "desc": "上市/估值/基本面聚合",
+            },
+        ]
+        for m in modules:
+            key = m.get("count_key")
+            m["count"] = int(counts.get(key, 0)) if key else None
+        return {"modules": modules, "counts": counts}
+
+    def get_signal_batch(self, signal_batch_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM signal_batch WHERE signal_batch_id=?",
+                (signal_batch_id,),
+            ).fetchone()
+            if not row:
+                return None
+            weights = conn.execute(
+                """
+                SELECT strategy_version, trade_date, symbol, weight, signal_value,
+                       signal_batch_id, created_at
+                FROM signal_prod_weight
+                WHERE signal_batch_id=?
+                ORDER BY weight DESC, symbol
+                LIMIT 500
+                """,
+                (signal_batch_id,),
+            ).fetchall()
+        d = dict(row)
+        try:
+            d["meta"] = json.loads(str(d.get("meta_json") or "{}"))
+        except json.JSONDecodeError:
+            d["meta"] = {}
+        d["weights"] = [dict(w) for w in weights]
+        return d
+
+    def list_universe_snapshots(
+        self,
+        *,
+        universe_code: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM universe_snapshot WHERE 1=1"
+        params: list[Any] = []
+        if universe_code:
+            sql += " AND universe_code=?"
+            params.append(universe_code)
+        sql += " ORDER BY as_of_date DESC, universe_code LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def get_universe_snapshot(
+        self, universe_snapshot_id: str
+    ) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM universe_snapshot WHERE universe_snapshot_id=?",
+                (universe_snapshot_id,),
+            ).fetchone()
+            if not row:
+                return None
+            members = conn.execute(
+                """
+                SELECT symbol, name, exchange, board, industry_code, industry_name,
+                       is_st, treat_type, index_weight, is_eligible
+                FROM universe_snapshot_member
+                WHERE universe_snapshot_id=?
+                ORDER BY COALESCE(index_weight, 0) DESC, symbol
+                LIMIT 500
+                """,
+                (universe_snapshot_id,),
+            ).fetchall()
+        d = dict(row)
+        try:
+            d["meta"] = json.loads(str(d.get("meta_json") or "{}"))
+        except json.JSONDecodeError:
+            d["meta"] = {}
+        d["members"] = [dict(m) for m in members]
+        return d
+
+    def list_ingest_batches(
+        self,
+        *,
+        lane: str | None = None,
+        module: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM ingest_batch WHERE 1=1"
+        params: list[Any] = []
+        if lane:
+            sql += " AND lane=?"
+            params.append(lane)
+        if module:
+            sql += " AND ingest_module=?"
+            params.append(module)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        for d in rows:
+            try:
+                d["meta"] = json.loads(str(d.pop("meta_json", None) or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+        return rows
+
+    def list_execution_adapters(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT kind, enabled, allow_fills, require_live_env, meta_json, created_at
+                FROM execution_adapter_params
+                ORDER BY kind
+                """
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(str(d.pop("meta_json", None) or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+            d["enabled"] = bool(int(d.get("enabled") or 0))
+            d["allow_fills"] = bool(int(d.get("allow_fills") or 0))
+            d["require_live_env"] = bool(int(d.get("require_live_env") or 0))
+            out.append(d)
+        return out
+
+    def list_evidence_freezes(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        lim = max(1, min(limit, 200))
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT freeze_id, evidence_run_id, universe_code, start_date, end_date,
+                       status, split_mode, hard_gates_json, summary_json, artifact_hash,
+                       actor, reason, created_at
+                FROM research_evidence_freeze
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            for key in ("hard_gates_json", "summary_json"):
+                raw = d.pop(key, None)
+                name = key.replace("_json", "")
+                try:
+                    d[name] = json.loads(str(raw or "{}"))
+                except json.JSONDecodeError:
+                    d[name] = {}
+            out.append(d)
+        return out
+
+    def list_process_batches(
+        self, *, kind: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM process_batch WHERE 1=1"
+        params: list[Any] = []
+        if kind:
+            sql += " AND process_kind=?"
+            params.append(kind)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        for d in rows:
+            try:
+                d["meta"] = json.loads(str(d.pop("meta_json", None) or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+        return rows
+
+    def list_cost_params(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM cost_params ORDER BY version"
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(str(d.pop("meta_json", None) or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
+    def list_risk_limits(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM risk_limits ORDER BY version"
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(str(d.pop("meta_json", None) or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
+    def list_promotion_gate_params(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM promotion_gate_params ORDER BY version"
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["thresholds"] = json.loads(
+                    str(d.pop("thresholds_json", None) or "{}")
+                )
+            except json.JSONDecodeError:
+                d["thresholds"] = {}
+            try:
+                d["meta"] = json.loads(str(d.pop("meta_json", None) or "{}"))
+            except json.JSONDecodeError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
+    def list_promotion_gate_results(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        lim = max(1, min(limit, 200))
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM promotion_gate_result
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            for key in ("metrics_json", "checks_json"):
+                raw = d.pop(key, None)
+                name = key.replace("_json", "")
+                try:
+                    d[name] = json.loads(str(raw or "{}"))
+                except json.JSONDecodeError:
+                    d[name] = {}
+            d["passed"] = bool(int(d.get("passed") or 0))
+            d["skipped"] = bool(int(d.get("skipped") or 0))
+            out.append(d)
+        return out
+
+    def list_capital_alloc(
+        self, *, account_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM strategy_capital_alloc WHERE 1=1"
+        params: list[Any] = []
+        if account_id:
+            sql += " AND account_id=?"
+            params.append(account_id)
+        sql += " ORDER BY account_id, strategy_version"
+        with get_conn() as conn:
+            return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_factor_catalog(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT factor_code, universe_code,
+                       COUNT(*) AS row_count,
+                       COUNT(DISTINCT symbol) AS symbol_count,
+                       MIN(trade_date) AS min_date,
+                       MAX(trade_date) AS max_date
+                FROM research_factor_value
+                GROUP BY factor_code, universe_code
+                ORDER BY factor_code, universe_code
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_factor_values(
+        self,
+        *,
+        factor_code: str,
+        universe_code: str | None = None,
+        as_of: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        code = (factor_code or "").strip()
+        if not code:
+            return {"factor_code": "", "count": 0, "items": []}
+        lim = max(1, min(limit, 500))
+        day = (as_of or "")[:10] or None
+        sql = """
+            SELECT factor_code, symbol, trade_date, value, universe_code, run_id
+            FROM research_factor_value
+            WHERE factor_code=?
+        """
+        params: list[Any] = [code]
+        if universe_code:
+            sql += " AND universe_code=?"
+            params.append(universe_code)
+        if day:
+            sql += " AND trade_date=?"
+            params.append(day)
+        sql += " ORDER BY trade_date DESC, value DESC NULLS LAST, symbol LIMIT ?"
+        params.append(lim)
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        return {
+            "factor_code": code,
+            "universe_code": universe_code,
+            "as_of": day,
+            "count": len(rows),
+            "items": rows,
+        }
+
+    def list_audit_logs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        lim = max(1, min(limit, 200))
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT audit_id, actor, method, path, status_code,
+                       request_json, result_json, created_at
+                FROM api_audit_log
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (lim,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            for key in ("request_json", "result_json"):
+                raw = d.pop(key, None)
+                name = key.replace("_json", "")
+                try:
+                    d[name] = json.loads(str(raw or "{}"))
+                except json.JSONDecodeError:
+                    d[name] = {}
+            out.append(d)
+        return out
+
+    def list_ledger_accounts(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT a.account_id, a.currency, a.opening_cash, a.status,
+                       a.created_at,
+                       (
+                         SELECT qty FROM ledger_balance b
+                         WHERE b.account_id=a.account_id
+                           AND b.asset_type='CASH' AND b.symbol=''
+                       ) AS cash
+                FROM ledger_account a
+                ORDER BY a.account_id
+                """
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            if d.get("cash") is None:
+                d["cash"] = float(d.get("opening_cash") or 0)
+            out.append(d)
+        return out
+
+    def list_ops_activity(self, *, limit: int = 40) -> list[dict[str, Any]]:
+        """跨模块最近活动时间线（只读合并）。"""
+        lim = max(1, min(limit, 100))
+        per = max(5, lim // 4)
+        events: list[dict[str, Any]] = []
+        with get_conn() as conn:
+            queries = [
+                (
+                    "ingest",
+                    """
+                    SELECT batch_id AS ref_id, status, created_at,
+                           lane || '/' || ingest_module || '/' || ingest_kind AS label
+                    FROM ingest_batch
+                    ORDER BY created_at DESC LIMIT ?
+                    """,
+                ),
+                (
+                    "process",
+                    """
+                    SELECT process_batch_id AS ref_id, status, created_at,
+                           process_kind AS label
+                    FROM process_batch
+                    ORDER BY created_at DESC LIMIT ?
+                    """,
+                ),
+                (
+                    "dq",
+                    """
+                    SELECT dq_run_id AS ref_id, status, created_at,
+                           scope AS label
+                    FROM dq_run
+                    ORDER BY created_at DESC LIMIT ?
+                    """,
+                ),
+                (
+                    "signal",
+                    """
+                    SELECT signal_batch_id AS ref_id, status,
+                           CAST(created_at AS TEXT) AS created_at,
+                           strategy_version AS label
+                    FROM signal_batch
+                    ORDER BY created_at DESC LIMIT ?
+                    """,
+                ),
+                (
+                    "execution",
+                    """
+                    SELECT execution_id AS ref_id, status,
+                           CAST(created_at AS TEXT) AS created_at,
+                           COALESCE(adapter, 'paper') AS label
+                    FROM execution_run
+                    ORDER BY created_at DESC LIMIT ?
+                    """,
+                ),
+                (
+                    "alert",
+                    """
+                    SELECT alert_id AS ref_id, COALESCE(status, 'open') AS status,
+                           CAST(created_at AS TEXT) AS created_at,
+                           COALESCE(code, severity) AS label
+                    FROM ops_alert
+                    ORDER BY created_at DESC LIMIT ?
+                    """,
+                ),
+            ]
+            for kind, sql in queries:
+                try:
+                    rows = conn.execute(sql, (per,)).fetchall()
+                except Exception:  # noqa: BLE001
+                    continue
+                for r in rows:
+                    d = dict(r)
+                    events.append(
+                        {
+                            "kind": kind,
+                            "ref_id": d.get("ref_id"),
+                            "status": d.get("status"),
+                            "label": d.get("label"),
+                            "created_at": str(d.get("created_at") or ""),
+                        }
+                    )
+        events.sort(key=lambda e: e.get("created_at") or "", reverse=True)
+        return events[:lim]

@@ -15,8 +15,10 @@ def compute_mom_20(
     *,
     start: str,
     end: str,
+    lookback: int = 20,
 ) -> list[dict[str, Any]]:
-    """MOM_20 = adj_close_t / adj_close_{t-20} - 1（按标的交易日序列，非日历日）。"""
+    """动量：adj_close_t / adj_close_{t-lookback} - 1（按标的交易日序列）。"""
+    lb = max(1, int(lookback))
     by_sym: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for b in bars:
         if b.get("adj_close") is None:
@@ -31,7 +33,7 @@ def compute_mom_20(
         for i, d in enumerate(dates):
             if d < start or d > end:
                 continue
-            j = i - 20
+            j = i - lb
             if j < 0:
                 continue
             prev = closes[j]
@@ -109,11 +111,13 @@ def compute_flow_net_5(
     *,
     start: str,
     end: str,
+    lookback: int = 5,
 ) -> list[dict[str, Any]]:
     """
-    FLOW_NET_5 = 近 5 个交易日主力净流入之和 / 近 5 日成交额之和。
+    FLOW_NET = 近 N 个交易日主力净流入之和 / 近 N 日成交额之和。
     资金优先 flow_type=STOCK_FLOW；成交额用 processed 日线 amount。
     """
+    lb = max(1, int(lookback))
     # scope(=symbol), trade_date -> net
     net: dict[tuple[str, str], float] = {}
     for r in flows:
@@ -149,8 +153,8 @@ def compute_flow_net_5(
         for i, d in enumerate(dates):
             if d < start or d > end:
                 continue
-            window = dates[max(0, i - 4) : i + 1]
-            if len(window) < 5:
+            window = dates[max(0, i - (lb - 1)) : i + 1]
+            if len(window) < lb:
                 continue
             sum_net = 0.0
             sum_amt = 0.0
@@ -208,11 +212,12 @@ def compute_tech_ma20_bias(
     *,
     start: str,
     end: str,
+    ma_code: str = "MA_20",
 ) -> list[dict[str, Any]]:
-    """TECH_MA20_BIAS = adj_close / MA_20 - 1（MA 来自 tech 表）。"""
+    """TECH_MA_BIAS = adj_close / MA_{period} - 1（MA 来自 tech 表）。"""
     ma: dict[tuple[str, str], float] = {}
     for r in tech_rows:
-        if str(r.get("indicator_code") or "") != "MA_20":
+        if str(r.get("indicator_code") or "") != ma_code:
             continue
         if r.get("value") is None:
             continue

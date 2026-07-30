@@ -77,3 +77,35 @@
     #f7f8fa 16px
   );
 }
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-3);
+  font-size: 12px;
+  background: var(--color-fill-1);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 4px 10px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-2);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legendSwatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}

@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { DatePicker, Space, Table, Typography } from "@arco-design/web-react";
 import { getDataCoverage, type ClientConfig } from "../api/gateway";
+import { Heatmap } from "../components/Heatmap";
+import { zh } from "../i18n/zh";
 import { s } from "../lib/format";
 import type { Settings } from "../state/settings";
 
@@ -23,6 +25,10 @@ export function CoveragePage({
 }) {
   const [range, setRange] = useState<string[]>([monthsAgo(5), settings.asOf]);
 
+  useEffect(() => {
+    setRange((prev) => [prev[0] || monthsAgo(5), settings.asOf || prev[1]]);
+  }, [settings.asOf]);
+
   const q = useQuery({
     queryKey: ["coverage", cfg.apiBase, range[0], range[1]],
     queryFn: () => getDataCoverage(cfg, { start: range[0], end: range[1] }),
@@ -30,8 +36,15 @@ export function CoveragePage({
   });
 
   const months = (q.data?.months as string[] | undefined) ?? [];
-  const matrix = (q.data?.matrix as Record<string, Record<string, number>> | undefined) ?? {};
-  const rows = Object.keys(matrix).map((label) => ({
+  const matrix =
+    (q.data?.matrix as Record<string, Record<string, number>> | undefined) ??
+    {};
+  const rowLabels = Object.keys(matrix);
+  const values = useMemo(
+    () => rowLabels.map((label) => months.map((m) => matrix[label]?.[m] ?? 0)),
+    [rowLabels, months, matrix],
+  );
+  const rows = rowLabels.map((label) => ({
     label,
     ...Object.fromEntries(months.map((m) => [m, matrix[label]?.[m] ?? 0])),
   }));
@@ -39,7 +52,7 @@ export function CoveragePage({
   if (!connected) {
     return (
       <div className="page">
-        <Typography.Text type="secondary">未连接网关</Typography.Text>
+        <Typography.Text type="secondary">{zh.notConnected}</Typography.Text>
       </div>
     );
   }
@@ -59,7 +72,22 @@ export function CoveragePage({
           }}
         />
       </Space>
+
+      <div style={{ marginBottom: 16 }}>
+        <Heatmap
+          title="覆盖热力图"
+          subtitle="颜色越深行数越多 · 空为缺口"
+          rowLabels={rowLabels}
+          colLabels={months}
+          values={values}
+          emptyHint="无覆盖矩阵"
+          loading={q.isLoading}
+        />
+      </div>
+
+      <Typography.Text bold>明细表</Typography.Text>
       <Table
+        style={{ marginTop: 8 }}
         rowKey={(r) => s(r.label)}
         size="small"
         loading={q.isLoading}
@@ -67,7 +95,13 @@ export function CoveragePage({
         data={rows}
         pagination={false}
         columns={[
-          { title: "表", dataIndex: "label", width: 120, fixed: "left", render: (v) => s(v) },
+          {
+            title: "表",
+            dataIndex: "label",
+            width: 120,
+            fixed: "left",
+            render: (v) => s(v),
+          },
           ...months.map((m) => ({
             title: m,
             dataIndex: m,
@@ -75,7 +109,11 @@ export function CoveragePage({
             render: (v: unknown) => {
               const n = Number(v) || 0;
               return (
-                <span style={{ color: n === 0 ? "rgb(var(--red-6))" : undefined }}>
+                <span
+                  style={{
+                    color: n === 0 ? "rgb(var(--red-6))" : undefined,
+                  }}
+                >
                   {n}
                 </span>
               );

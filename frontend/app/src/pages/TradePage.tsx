@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
+  Grid,
   Message,
   Space,
   Table,
@@ -10,15 +11,21 @@ import {
 } from "@arco-design/web-react";
 import {
   getExecution,
+  getLedger,
   listExecutions,
   listPending,
   postLedger,
   resumePending,
   type ClientConfig,
 } from "../api/gateway";
+import { CategoryBars } from "../components/CategoryBars";
+import { HorizontalBars } from "../components/HorizontalBars";
+import { PieChart } from "../components/PieChart";
 import { zh } from "../i18n/zh";
-import { s } from "../lib/format";
+import { n, s } from "../lib/format";
 import type { Settings } from "../state/settings";
+
+const { Row, Col } = Grid;
 
 export function TradePage({
   cfg,
@@ -32,6 +39,7 @@ export function TradePage({
   const qc = useQueryClient();
   const liveLocked = settings.env === "live";
   const [id, setId] = useState("");
+  const [unpostedOnly, setUnpostedOnly] = useState(false);
   const listQ = useQuery({
     queryKey: ["executions", cfg.apiBase],
     queryFn: () => listExecutions(cfg, 50),
@@ -69,14 +77,69 @@ export function TradePage({
     onSuccess: () => {
       Message.success(zh.postLedger);
       void qc.invalidateQueries({ queryKey: ["execution"] });
+      void qc.invalidateQueries({ queryKey: ["executions"] });
+      void qc.invalidateQueries({ queryKey: ["ledger"] });
+      void qc.invalidateQueries({ queryKey: ["pipeline"] });
     },
     onError: (e: Error) => Message.error(e.message),
   });
+
+  const ledgerQ = useQuery({
+    queryKey: ["ledger", cfg.apiBase, settings.accountId, settings.asOf],
+    queryFn: () => getLedger(cfg, settings.accountId, settings.asOf),
+    enabled: connected,
+  });
+  const postedIds = useMemo(() => {
+    const posts =
+      (ledgerQ.data?.postings as Record<string, unknown>[] | undefined) ?? [];
+    return new Set(
+      posts
+        .filter((p) => String(p.status).toLowerCase() === "committed")
+        .map((p) => String(p.execution_id || "")),
+    );
+  }, [ledgerQ.data]);
 
   const orders =
     (detailQ.data?.orders as Record<string, unknown>[] | undefined) ?? [];
   const fills =
     (detailQ.data?.fills as Record<string, unknown>[] | undefined) ?? [];
+
+  const statusSlices = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of listQ.data ?? []) {
+      const st = String(r.status || "unknown");
+      map[st] = (map[st] || 0) + 1;
+    }
+    return Object.entries(map).map(([k, v]) => ({
+      id: k,
+      label: k,
+      value: v,
+    }));
+  }, [listQ.data]);
+
+  const fillBars = useMemo(
+    () =>
+      fills.map((f, i) => ({
+        id: `${s(f.fill_id)}-${i}`,
+        label: `${s(f.side)} ${s(f.symbol)}`,
+        value: Math.abs(Number(f.amount) || 0),
+        color: String(f.side).toUpperCase().includes("SELL")
+          ? "#f53f3f"
+          : "#165dff",
+      })),
+    [fills],
+  );
+
+  const pendingBars = useMemo(
+    () =>
+      (pendQ.data ?? []).map((r) => ({
+        id: s(r.pending_id, s(r.symbol)),
+        label: `${s(r.side)} ${s(r.symbol)}`,
+        value: Number(r.qty_remaining ?? r.remaining_qty ?? r.qty) || 0,
+        color: "#ff7d00",
+      })),
+    [pendQ.data],
+  );
 
   if (!connected) {
     return (
@@ -97,16 +160,54 @@ export function TradePage({
           disabled={liveLocked || !settings.asOf}
           loading={resumeMut.isPending}
           onClick={() => resumeMut.mutate()}
-          title={liveLocked ? zh.liveLocked : undefined}
+          title={
+            liveLocked
+              ? zh.liveLocked
+              : !settings.asOf
+                ? zh.needAsOf
+                : undefined
+          }
         >
           {zh.resumePending}
         </Button>
+        <Button
+          size="mini"
+          type={unpostedOnly ? "primary" : "default"}
+          onClick={() => setUnpostedOnly((v) => !v)}
+        >
+          仅未过账
+        </Button>
       </Space>
+
+      <Row gutter={12} style={{ marginBottom: 12 }}>
+        <Col span={10}>
+          <PieChart
+            title="执行状态"
+            slices={statusSlices}
+            height={180}
+            emptyHint="暂无执行批次"
+          />
+        </Col>
+        <Col span={14}>
+          <HorizontalBars
+            title="未成交残差"
+            items={pendingBars}
+            height={180}
+            formatValue={(v) => n(v, 0)}
+            emptyHint="无 open pending"
+          />
+        </Col>
+      </Row>
+
       <Table
         rowKey={(r) => s(r.execution_id)}
         size="small"
         loading={listQ.isLoading}
-        data={listQ.data ?? []}
+        data={(listQ.data ?? []).filter((r) => {
+          if (!unpostedOnly) return true;
+          const eid = String(r.execution_id || "");
+          return eid && !postedIds.has(eid);
+        })}
         style={{ marginBottom: 12 }}
         onRow={(r) => ({
           onClick: () => setId(s(r.execution_id, "")),
@@ -127,6 +228,19 @@ export function TradePage({
             render: (_, r) => <Tag>{s(r.status)}</Tag>,
           },
           {
+            title: "过账",
+            width: 80,
+            render: (_, r) => {
+              const eid = String(r.execution_id || "");
+              const ok = postedIds.has(eid);
+              return (
+                <Tag color={ok ? "green" : "orangered"} size="small">
+                  {ok ? "已过账" : "未过账"}
+                </Tag>
+              );
+            },
+          },
+          {
             title: "fills",
             width: 70,
             render: (_, r) => s(r.fill_count),
@@ -142,8 +256,15 @@ export function TradePage({
             </Typography.Text>
             <Button
               size="mini"
-              disabled={liveLocked}
+              disabled={liveLocked || postedIds.has(id)}
               loading={postMut.isPending}
+              title={
+                liveLocked
+                  ? zh.liveLocked
+                  : postedIds.has(id)
+                    ? "已过账"
+                    : "将成交写入账本"
+              }
               onClick={() => postMut.mutate(id)}
             >
               {zh.postLedger}
@@ -166,6 +287,14 @@ export function TradePage({
             ]}
           />
           <Typography.Text>{zh.fills}</Typography.Text>
+          {fills.length ? (
+            <CategoryBars
+              title="成交金额"
+              items={fillBars}
+              height={160}
+              formatValue={(v) => n(v, 0)}
+            />
+          ) : null}
           <Table
             rowKey={(r) => `${s(r.fill_id)}-${s(r.symbol)}-${s(r.price)}`}
             size="small"

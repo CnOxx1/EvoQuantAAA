@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Drawer, Select, Space, Table, Typography } from "@arco-design/web-react";
 import {
@@ -8,6 +8,8 @@ import {
   type ClientConfig,
   type JsonMap,
 } from "../api/gateway";
+import { TimeSeriesChart } from "../components/TimeSeriesChart";
+import { toLinePoints } from "../lib/chartTime";
 import { fmtAmt, fmtPct, s } from "../lib/format";
 import type { Settings } from "../state/settings";
 
@@ -50,6 +52,20 @@ export function BoardsPage({
       }),
     enabled: connected && Boolean(name),
   });
+
+  const members = memQ.data?.items ?? [];
+  const histBars = histQ.data?.bars ?? [];
+  const closeLine = useMemo(
+    () => [
+      {
+        id: "收盘",
+        color: "#165dff",
+        data: toLinePoints(histBars as JsonMap[], "trade_date", "close"),
+        lineWidth: 2 as const,
+      },
+    ],
+    [histBars],
+  );
 
   if (!connected) {
     return (
@@ -112,20 +128,29 @@ export function BoardsPage({
         ]}
       />
       <Drawer
-        width={640}
+        width={720}
         title={name || "板块详情"}
         visible={Boolean(selected)}
         onCancel={() => setSelected(null)}
         footer={null}
       >
-        <Typography.Text bold>近 60 日</Typography.Text>
+        <div style={{ marginBottom: 12 }}>
+          <TimeSeriesChart
+            title="板块收盘"
+            subtitle="近 60 日"
+            lines={closeLine}
+            height={200}
+            emptyHint={histQ.isLoading ? "加载中…" : "无历史行情"}
+          />
+        </div>
+        <Typography.Text bold>近 60 日明细</Typography.Text>
         <Table
           style={{ marginTop: 8, marginBottom: 16 }}
           rowKey={(r) => s(r.trade_date)}
           size="mini"
           loading={histQ.isLoading}
-          data={histQ.data?.bars ?? []}
-          pagination={{ pageSize: 10, size: "mini" }}
+          data={histBars}
+          pagination={{ pageSize: 8, size: "mini" }}
           columns={[
             { title: "日期", dataIndex: "trade_date", render: (v) => s(v) },
             { title: "收盘", dataIndex: "close", render: (v) => s(v) },
@@ -142,14 +167,14 @@ export function BoardsPage({
           ]}
         />
         <Typography.Text bold>
-          成分（行业映射，{memQ.data?.count ?? 0}）
+          成分（行业映射，{members.length}）
         </Typography.Text>
         <Table
           style={{ marginTop: 8 }}
           rowKey={(r) => s(r.symbol)}
           size="mini"
           loading={memQ.isLoading}
-          data={memQ.data?.items ?? []}
+          data={members}
           pagination={{ pageSize: 10, size: "mini" }}
           columns={[
             { title: "代码", dataIndex: "symbol", render: (v) => s(v) },

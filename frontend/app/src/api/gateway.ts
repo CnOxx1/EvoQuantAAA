@@ -8,8 +8,31 @@ export type JsonMap = Record<string, unknown>;
 type Envelope<T> = {
   ok: boolean;
   data?: T;
-  error?: { code?: string; message?: string; detail?: string };
+  error?: { code?: string; message?: string; detail?: string; status?: number };
+  meta?: JsonMap;
 };
+
+function extractErrorMessage(body: unknown, status: number): string {
+  if (!body || typeof body !== "object") return `HTTP ${status}`;
+  const b = body as Record<string, unknown>;
+
+  // FastAPI wraps our envelope: { detail: { ok:false, error:{message} } }
+  const detail = b.detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as Record<string, unknown>;
+    const err = d.error as Record<string, unknown> | undefined;
+    if (err?.message) return String(err.message);
+    if (typeof d.message === "string") return d.message;
+  }
+  if (typeof detail === "string") return detail;
+
+  const err = b.error as Record<string, unknown> | undefined;
+  if (err?.message) return String(err.message);
+  if (err?.detail) return String(err.detail);
+  if (err?.code) return String(err.code);
+  if (typeof b.message === "string") return b.message;
+  return `HTTP ${status}`;
+}
 
 async function request<T>(
   cfg: ClientConfig,
@@ -26,16 +49,21 @@ async function request<T>(
     ...init,
     headers,
   });
-  const body = (await res.json().catch(() => ({}))) as Envelope<T>;
-  if (!res.ok || body.ok === false) {
-    const msg =
-      body.error?.message ||
-      body.error?.detail ||
-      body.error?.code ||
-      `HTTP ${res.status}`;
-    throw new Error(msg);
+  const body = (await res.json().catch(() => ({}))) as Envelope<T> & {
+    detail?: unknown;
+  };
+  const okFlag = (body as Envelope<T>).ok;
+  const nested =
+    body.detail && typeof body.detail === "object"
+      ? (body.detail as Envelope<T>)
+      : null;
+  if (!res.ok || okFlag === false || nested?.ok === false) {
+    throw new Error(extractErrorMessage(body, res.status));
   }
-  return body.data as T;
+  // success may be bare envelope
+  if ("data" in body) return body.data as T;
+  if (nested && "data" in nested) return nested.data as T;
+  return body as T;
 }
 
 export async function health(cfg: ClientConfig) {
@@ -62,6 +90,26 @@ export function promoteStrategy(
   body: JsonMap,
 ) {
   return request(cfg, `/v1/strategies/${encodeURIComponent(version)}/promote`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type RegisterStrategyBody = {
+  strategy_code: string;
+  strategy_kind?: string;
+  factor_code: string;
+  top_n?: number;
+  rebalance_days?: number;
+  universe_code?: string;
+  factor_type?: string;
+  research_run_id?: string;
+  backtest_run_id?: string;
+  note?: string;
+};
+
+export function registerStrategy(cfg: ClientConfig, body: RegisterStrategyBody) {
+  return request<JsonMap>(cfg, "/v1/strategies", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -377,6 +425,28 @@ export function getBacktestRun(cfg: ClientConfig, runId: string) {
   );
 }
 
+export type BacktestRunBody = {
+  strategy?: string;
+  start: string;
+  end: string;
+  universe?: string;
+  factor_type?: string;
+  factor?: string;
+  top_n?: number;
+  rebalance_days?: number;
+  benchmark?: string;
+  cash?: number;
+  require_dq?: boolean;
+  cost_version?: string;
+};
+
+export function runBacktest(cfg: ClientConfig, body: BacktestRunBody) {
+  return request<JsonMap>(cfg, "/v1/backtest/runs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function searchSecurities(
   cfg: ClientConfig,
   opts: { q: string; asOf?: string; limit?: number },
@@ -520,4 +590,193 @@ export function getDataCoverage(
   const p = new URLSearchParams({ start: opts.start, end: opts.end });
   if (opts.symbols) p.set("symbols", opts.symbols);
   return request<JsonMap>(cfg, `/v1/data/coverage?${p}`);
+}
+
+export type ModuleInfo = {
+  id: string;
+  name: string;
+  path: string;
+  route: string;
+  count_key?: string | null;
+  count?: number | null;
+  desc: string;
+};
+
+export type ModulesResponse = {
+  modules: ModuleInfo[];
+  counts: Record<string, number>;
+};
+
+export function listModules(cfg: ClientConfig) {
+  return request<ModulesResponse>(cfg, "/v1/modules");
+}
+
+export function getSignalBatch(cfg: ClientConfig, batchId: string) {
+  return request<JsonMap>(
+    cfg,
+    `/v1/signal/batches/${encodeURIComponent(batchId)}`,
+  );
+}
+
+export function listUniverseSnapshots(
+  cfg: ClientConfig,
+  opts?: { universeCode?: string; limit?: number },
+) {
+  const p = new URLSearchParams();
+  if (opts?.universeCode) p.set("universe_code", opts.universeCode);
+  if (opts?.limit) p.set("limit", String(opts.limit));
+  const q = p.toString() ? `?${p}` : "";
+  return request<JsonMap[]>(cfg, `/v1/universe/snapshots${q}`);
+}
+
+export function getUniverseSnapshot(cfg: ClientConfig, id: string) {
+  return request<JsonMap>(
+    cfg,
+    `/v1/universe/snapshots/${encodeURIComponent(id)}`,
+  );
+}
+
+export function listIngestBatches(
+  cfg: ClientConfig,
+  opts?: { lane?: string; module?: string; limit?: number },
+) {
+  const p = new URLSearchParams();
+  if (opts?.lane) p.set("lane", opts.lane);
+  if (opts?.module) p.set("module", opts.module);
+  if (opts?.limit) p.set("limit", String(opts.limit));
+  const q = p.toString() ? `?${p}` : "";
+  return request<JsonMap[]>(cfg, `/v1/data/ingest/batches${q}`);
+}
+
+export function listExecutionAdapters(cfg: ClientConfig) {
+  return request<JsonMap[]>(cfg, "/v1/execution/adapters");
+}
+
+export function listEvidenceFreezes(cfg: ClientConfig, limit = 50) {
+  return request<JsonMap[]>(cfg, `/v1/research/freezes?limit=${limit}`);
+}
+
+export function listProcessBatches(
+  cfg: ClientConfig,
+  opts?: { kind?: string; limit?: number },
+) {
+  const p = new URLSearchParams();
+  if (opts?.kind) p.set("kind", opts.kind);
+  if (opts?.limit) p.set("limit", String(opts.limit));
+  const q = p.toString() ? `?${p}` : "";
+  return request<JsonMap[]>(cfg, `/v1/data/process/batches${q}`);
+}
+
+export function listCostParams(cfg: ClientConfig) {
+  return request<JsonMap[]>(cfg, "/v1/ref/cost-params");
+}
+
+export function listRiskLimits(cfg: ClientConfig) {
+  return request<JsonMap[]>(cfg, "/v1/ref/risk-limits");
+}
+
+export function listPromotionGateParams(cfg: ClientConfig) {
+  return request<JsonMap[]>(cfg, "/v1/ref/promotion-gates");
+}
+
+export function listPromotionGateResults(cfg: ClientConfig, limit = 50) {
+  return request<JsonMap[]>(
+    cfg,
+    `/v1/ref/promotion-gate-results?limit=${limit}`,
+  );
+}
+
+export function listCapitalAlloc(cfg: ClientConfig, accountId?: string) {
+  const q = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+  return request<JsonMap[]>(cfg, `/v1/ledger/capital-alloc${q}`);
+}
+
+export function listFactorCatalog(cfg: ClientConfig) {
+  return request<JsonMap[]>(cfg, "/v1/research/factors");
+}
+
+export function listFactorDefs(cfg: ClientConfig, status?: string | null) {
+  // null → ACTIVE；"" → 全部（含 RETIRED）
+  if (status === "") {
+    return request<JsonMap[]>(cfg, "/v1/research/factor-defs?status=");
+  }
+  const st = status ?? "ACTIVE";
+  return request<JsonMap[]>(
+    cfg,
+    `/v1/research/factor-defs?status=${encodeURIComponent(st)}`,
+  );
+}
+
+export function registerFactorDef(cfg: ClientConfig, body: JsonMap) {
+  return request<JsonMap>(cfg, "/v1/research/factor-defs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateFactorDef(
+  cfg: ClientConfig,
+  factorCode: string,
+  body: JsonMap,
+) {
+  return request<JsonMap>(
+    cfg,
+    `/v1/research/factor-defs/${encodeURIComponent(factorCode)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export function runResearchFactor(cfg: ClientConfig, body: JsonMap) {
+  return request<JsonMap>(cfg, "/v1/research/runs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function listFactorValues(
+  cfg: ClientConfig,
+  opts: {
+    factorCode: string;
+    universeCode?: string;
+    asOf?: string;
+    limit?: number;
+  },
+) {
+  const p = new URLSearchParams();
+  if (opts.universeCode) p.set("universe_code", opts.universeCode);
+  if (opts.asOf) p.set("as_of", opts.asOf);
+  if (opts.limit) p.set("limit", String(opts.limit));
+  const q = p.toString() ? `?${p}` : "";
+  return request<{
+    factor_code: string;
+    universe_code?: string;
+    as_of?: string;
+    count: number;
+    items: JsonMap[];
+  }>(
+    cfg,
+    `/v1/research/factors/${encodeURIComponent(opts.factorCode)}/values${q}`,
+  );
+}
+
+export function listAuditLogs(cfg: ClientConfig, limit = 50) {
+  return request<JsonMap[]>(cfg, `/v1/ops/audit?limit=${limit}`);
+}
+
+export function listOpsActivity(cfg: ClientConfig, limit = 40) {
+  return request<JsonMap[]>(cfg, `/v1/ops/activity?limit=${limit}`);
+}
+
+export function runScheduleOnce(cfg: ClientConfig, body: JsonMap) {
+  return request(cfg, "/v1/ops/schedule/once", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function listLedgerAccounts(cfg: ClientConfig) {
+  return request<JsonMap[]>(cfg, "/v1/ledger/accounts");
 }

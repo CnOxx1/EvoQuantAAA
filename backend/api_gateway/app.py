@@ -6,13 +6,19 @@ from typing import Any
 
 from api_gateway.auth import check_bearer
 from api_gateway.schemas import (
+    BacktestRunBody,
     ExecutionRunBody,
+    FactorDefBody,
+    FactorDefPatchBody,
     KillBody,
     LedgerPostBody,
     PortfolioBuildBody,
     PromoteBody,
+    RegisterBody,
+    ResearchRunBody,
     ResumePendingBody,
     ReviewBody,
+    ScheduleOnceBody,
     SignalRunBody,
 )
 from api_gateway.service import GatewayService
@@ -81,6 +87,27 @@ def create_app() -> Any:
         strategy_version: str, _: str = Depends(require_actor)
     ) -> dict[str, Any]:
         return _emit(svc.get_strategy(strategy_version))
+
+    @app.post("/v1/strategies")
+    def register_strategy(
+        payload: RegisterBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.register_strategy(
+                strategy_code=payload.strategy_code,
+                strategy_kind=payload.strategy_kind,
+                factor_code=payload.factor_code,
+                top_n=payload.top_n,
+                rebalance_days=payload.rebalance_days,
+                universe_code=payload.universe_code,
+                factor_type=payload.factor_type,
+                research_run_id=payload.research_run_id,
+                backtest_run_id=payload.backtest_run_id,
+                note=payload.note,
+                actor=actor,
+            )
+        )
 
     @app.post("/v1/strategies/{strategy_version}/promote")
     def promote_strategy(
@@ -295,6 +322,29 @@ def create_app() -> Any:
         _: str = Depends(require_actor),
     ) -> dict[str, Any]:
         return _emit(svc.list_backtest_runs(status=status, limit=limit))
+
+    @app.post("/v1/backtest/runs")
+    def run_backtest(
+        payload: BacktestRunBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.run_backtest(
+                strategy=payload.strategy,
+                start=payload.start,
+                end=payload.end,
+                universe=payload.universe,
+                factor_type=payload.factor_type,
+                factor=payload.factor,
+                top_n=payload.top_n,
+                rebalance_days=payload.rebalance_days,
+                benchmark=payload.benchmark,
+                cash=payload.cash,
+                require_dq=payload.require_dq,
+                cost_version=payload.cost_version,
+                actor=actor,
+            )
+        )
 
     @app.get("/v1/backtest/runs/{run_id}")
     def backtest_detail(
@@ -560,6 +610,202 @@ def create_app() -> Any:
     @app.get("/v1/ops/pipeline")
     def ops_pipeline(_: str = Depends(require_actor)) -> dict[str, Any]:
         return _emit(svc.ops_pipeline())
+
+    @app.get("/v1/modules")
+    def modules(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_modules())
+
+    @app.get("/v1/signal/batches/{signal_batch_id}")
+    def signal_batch_detail(
+        signal_batch_id: str,
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.get_signal_batch(signal_batch_id))
+
+    @app.get("/v1/universe/snapshots")
+    def universe_snapshots(
+        universe_code: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_universe_snapshots(universe_code=universe_code, limit=limit)
+        )
+
+    @app.get("/v1/universe/snapshots/{universe_snapshot_id}")
+    def universe_snapshot_detail(
+        universe_snapshot_id: str,
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.get_universe_snapshot(universe_snapshot_id))
+
+    @app.get("/v1/data/ingest/batches")
+    def ingest_batches(
+        lane: str | None = None,
+        module: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_ingest_batches(lane=lane, module=module, limit=limit)
+        )
+
+    @app.get("/v1/execution/adapters")
+    def execution_adapters(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_execution_adapters())
+
+    @app.get("/v1/research/freezes")
+    def research_freezes(
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_evidence_freezes(limit=limit))
+
+    @app.get("/v1/data/process/batches")
+    def process_batches(
+        kind: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_process_batches(kind=kind, limit=limit))
+
+    @app.get("/v1/ref/cost-params")
+    def cost_params(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_cost_params())
+
+    @app.get("/v1/ref/risk-limits")
+    def risk_limits(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_risk_limits())
+
+    @app.get("/v1/ref/promotion-gates")
+    def promotion_gates(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_promotion_gate_params())
+
+    @app.get("/v1/ref/promotion-gate-results")
+    def promotion_gate_results(
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_promotion_gate_results(limit=limit))
+
+    @app.get("/v1/ledger/capital-alloc")
+    def capital_alloc(
+        account_id: str | None = None,
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_capital_alloc(account_id=account_id))
+
+    @app.get("/v1/research/factors")
+    def research_factors(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_factor_catalog())
+
+    @app.get("/v1/research/factor-defs")
+    def research_factor_defs(
+        status: str | None = Query("ACTIVE"),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_factor_defs(status=status))
+
+    @app.post("/v1/research/factor-defs")
+    def research_factor_defs_create(
+        payload: FactorDefBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.register_factor_def(
+                factor_code=payload.factor_code,
+                template=payload.template,
+                params=payload.params or {},
+                display_name=payload.display_name,
+                description=payload.description,
+                status=payload.status,
+                actor=actor,
+            )
+        )
+
+    @app.patch("/v1/research/factor-defs/{factor_code}")
+    def research_factor_defs_patch(
+        factor_code: str,
+        payload: FactorDefPatchBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.update_factor_def(
+                factor_code,
+                display_name=payload.display_name,
+                params=payload.params,
+                description=payload.description,
+                status=payload.status,
+                actor=actor,
+            )
+        )
+
+    @app.post("/v1/research/runs")
+    def research_runs_create(
+        payload: ResearchRunBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.run_research_factor(
+                factor_code=payload.factor_code,
+                start=payload.start,
+                end=payload.end,
+                universe_code=payload.universe_code,
+                factor_type=payload.factor_type,
+                require_dq=payload.require_dq,
+                actor=actor,
+            )
+        )
+
+    @app.get("/v1/research/factors/{factor_code}/values")
+    def research_factor_values(
+        factor_code: str,
+        universe_code: str | None = None,
+        as_of: str | None = None,
+        limit: int = Query(200, ge=1, le=500),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.list_factor_values(
+                factor_code=factor_code,
+                universe_code=universe_code,
+                as_of=as_of,
+                limit=limit,
+            )
+        )
+
+    @app.get("/v1/ops/audit")
+    def ops_audit(
+        limit: int = Query(50, ge=1, le=200),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_audit_logs(limit=limit))
+
+    @app.get("/v1/ops/activity")
+    def ops_activity(
+        limit: int = Query(40, ge=1, le=100),
+        _: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(svc.list_ops_activity(limit=limit))
+
+    @app.post("/v1/ops/schedule/once")
+    def ops_schedule_once(
+        payload: ScheduleOnceBody = Body(...),
+        actor: str = Depends(require_actor),
+    ) -> dict[str, Any]:
+        return _emit(
+            svc.run_schedule_once(
+                as_of=payload.as_of,
+                universe=payload.universe,
+                factor_type=payload.factor_type,
+                force=payload.force,
+                actor=actor,
+            )
+        )
+
+    @app.get("/v1/ledger/accounts")
+    def ledger_accounts(_: str = Depends(require_actor)) -> dict[str, Any]:
+        return _emit(svc.list_ledger_accounts())
 
     @app.get("/")
     def root() -> dict[str, Any]:

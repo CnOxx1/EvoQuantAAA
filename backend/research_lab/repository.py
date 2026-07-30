@@ -373,3 +373,96 @@ class ResearchRepository:
         params.append(max(1, min(int(limit), 200)))
         with get_conn() as conn:
             return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+    def list_factor_defs(
+        self, *, status: str | None = "ACTIVE", limit: int = 200
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM research_factor_def WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY is_builtin DESC, factor_code ASC LIMIT ?"
+        params.append(max(1, min(int(limit), 500)))
+        with get_conn() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        for r in rows:
+            try:
+                r["params"] = json.loads(str(r.get("params_json") or "{}"))
+            except json.JSONDecodeError:
+                r["params"] = {}
+        return rows
+
+    def get_factor_def(self, factor_code: str) -> dict[str, Any] | None:
+        code = (factor_code or "").strip()
+        if not code:
+            return None
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_factor_def WHERE factor_code=?",
+                (code,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["params"] = json.loads(str(d.get("params_json") or "{}"))
+        except json.JSONDecodeError:
+            d["params"] = {}
+        return d
+
+    def upsert_factor_def(self, row: dict[str, Any]) -> dict[str, Any]:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO research_factor_def (
+                    factor_code, display_name, template, params_json, description,
+                    status, is_builtin, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (factor_code) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    template=excluded.template,
+                    params_json=excluded.params_json,
+                    description=excluded.description,
+                    status=excluded.status,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    row["factor_code"],
+                    row.get("display_name") or row["factor_code"],
+                    row["template"],
+                    json.dumps(row.get("params") or {}, ensure_ascii=False),
+                    row.get("description"),
+                    row.get("status") or "ACTIVE",
+                    int(row.get("is_builtin") or 0),
+                    row.get("created_by"),
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+        got = self.get_factor_def(row["factor_code"])
+        assert got is not None
+        return got
+
+    def update_factor_def(
+        self, factor_code: str, patch: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        cur = self.get_factor_def(factor_code)
+        if not cur:
+            return None
+        if int(cur.get("is_builtin") or 0) == 1:
+            if "template" in patch and patch["template"] != cur["template"]:
+                raise ValueError("内置因子不可更换模板")
+        merged = {
+            "factor_code": cur["factor_code"],
+            "display_name": patch.get("display_name", cur.get("display_name")),
+            "template": patch.get("template", cur["template"]),
+            "params": patch.get("params", cur.get("params") or {}),
+            "description": patch.get("description", cur.get("description")),
+            "status": patch.get("status", cur.get("status") or "ACTIVE"),
+            "is_builtin": int(cur.get("is_builtin") or 0),
+            "created_by": cur.get("created_by"),
+            "created_at": cur.get("created_at"),
+            "updated_at": patch["updated_at"],
+        }
+        return self.upsert_factor_def(merged)

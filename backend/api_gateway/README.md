@@ -45,6 +45,7 @@
 | --- | --- | --- |
 | GET | `/health` | 健康检查（无鉴权） |
 | GET | `/v1/strategies` | 策略列表 `?status=` |
+| POST | `/v1/strategies` | 注册 DRAFT `{strategy_code, factor_code, top_n?, …}` |
 | GET | `/v1/strategies/{version}` | 策略详情（含 `transitions` / `gate_results`） |
 | POST | `/v1/strategies/{version}/promote` | 晋升 `{to, backtest_run?, reason?, skip_gates?, gate_version?}`；质量门失败 400 + meta.failing |
 | GET | `/v1/signal/batches` | 信号批次列表 |
@@ -65,6 +66,7 @@
 | GET | `/v1/research/runs` | 研究运行列表 |
 | GET | `/v1/research/runs/{run_id}` | 研究详情（含 `meta` / `freezes`） |
 | GET | `/v1/backtest/runs` | 回测列表 `?status=&limit=` |
+| POST | `/v1/backtest/runs` | 跑回测 `{strategy,start,end,universe,factor?,…}` |
 | GET | `/v1/backtest/runs/{run_id}` | 回测详情（含 `nav` / `trades`） |
 | GET | `/v1/market/search` | 标的搜索 `?q=&as_of=&limit=` |
 | GET | `/v1/market/ranks/meta` | 榜单可用日期与类型 |
@@ -85,10 +87,33 @@
 | GET | `/v1/data/dq/runs/{id}` | DQ 详情（含规则结果） |
 | GET | `/v1/data/dq/gates` | DQ 门禁 |
 | GET | `/v1/data/coverage` | 覆盖率矩阵 `?start=&end=` |
-| GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 |
+| GET | `/v1/ledger/accounts/{id}` | 账本；`?as_of=` 附可卖 + 市值/NAV 标记（`mark`） |
 | POST | `/v1/ledger/post` | 过账 `{execution_id}` |
 | GET | `/v1/ops/alerts` | 告警 |
 | GET | `/v1/ops/pipeline` | 总览轻量管道状态（alerts/DQ/signal/portfolio/risk/exec/ledger） |
+| GET | `/v1/modules` | 后端模块地图 + 表行数（运维台导航） |
+| GET | `/v1/signal/batches/{id}` | 信号批次详情（含权重） |
+| GET | `/v1/universe/snapshots` | Universe 快照列表 `?universe_code=` |
+| GET | `/v1/universe/snapshots/{id}` | 快照详情（含成员） |
+| GET | `/v1/data/ingest/batches` | 取数批次 `?lane=&module=` |
+| GET | `/v1/execution/adapters` | 执行适配器参数 |
+| GET | `/v1/research/freezes` | 证据冻结列表 |
+| GET | `/v1/data/process/batches` | 加工批次 `?kind=` |
+| GET | `/v1/ref/cost-params` | 费用/冲击参数版本 |
+| GET | `/v1/ref/risk-limits` | 风控限额版本 |
+| GET | `/v1/ref/promotion-gates` | 晋升门阈值 |
+| GET | `/v1/ref/promotion-gate-results` | 晋升评估记录 |
+| GET | `/v1/ledger/capital-alloc` | 策略资本配额 `?account_id=` |
+| GET | `/v1/research/factors` | 因子目录（按 code×universe 聚合） |
+| GET | `/v1/research/factor-defs` | 因子定义列表 `?status=`（空=全部） |
+| POST | `/v1/research/factor-defs` | 注册因子 `{factor_code,template,params?}` |
+| PATCH | `/v1/research/factor-defs/{code}` | 改名称/参数/状态 |
+| POST | `/v1/research/runs` | 计算因子 `{factor_code,start,end,universe_code?}` |
+| GET | `/v1/research/factors/{code}/values` | 因子截面 `?universe_code=&as_of=` |
+| GET | `/v1/ops/audit` | API 写操作审计 |
+| GET | `/v1/ops/activity` | 跨模块活动时间线 |
+| POST | `/v1/ops/schedule/once` | 跑一轮日更编排 `{as_of, universe, force}`（可能耗时） |
+| GET | `/v1/ledger/accounts` | 账本账户列表 |
 
 鉴权：设置 `ASHARE_API_TOKEN` 后需 `Authorization: Bearer <token>`；未设置则开发机开放。  
 生产建议：`ASHARE_API_REQUIRE_TOKEN=1`（未配置 token 时一律 401）。  
